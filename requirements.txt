@@ -1,0 +1,6 @@
+# Requirements for DSC project
+numpy
+scipy
+torch
+matplotlib
+scikit-commpy
