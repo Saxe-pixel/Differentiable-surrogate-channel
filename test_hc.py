@@ -42,7 +42,7 @@ if __name__ == "__main__":
     pulse = pulse.to(device)
 
     # Training loop
-    num_epochs = 8
+    num_epochs = 10
     for epoch in range(num_epochs):
         print(f"Epoch {epoch+1}/{num_epochs}")
         optimizer.zero_grad()
