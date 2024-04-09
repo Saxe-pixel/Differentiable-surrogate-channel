@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from commpy.filters import rrcosfilter
 from lib.utility import find_closest_symbol
-from lib.channels import AWGNChannel
+from lib.channels import AWGNChannel, AWGNChannelWithLinearISI
 
 class SymbolRecoveryCNN(nn.Module):
     def __init__(self, sps):
@@ -55,6 +55,7 @@ x = F.conv1d(tx_symbols_up.view(1, 1, -1), pulse.view(1, 1, -1), padding=(pulse.
 # Channel
 pulse_energy = np.sum(g**2)
 channel = AWGNChannel(SNR_DB, pulse_energy)
+# channel = AWGNChannelWithLinearISI(snr_db=SNR_DB, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
 y = channel.forward(x)
 
 # Model, loss, optimizer
@@ -64,7 +65,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Training
 y_reshaped = y.view(1, 1, -1)  # Reshape for Conv1D
-for epoch in range(100):  # Number of epochs
+for epoch in range(200):  # Number of epochs
     optimizer.zero_grad()
     outputs = model(y_reshaped)
     loss = criterion(outputs.view(-1)[:N_SYMBOLS], tx_symbols)  # Align output and target dimensions

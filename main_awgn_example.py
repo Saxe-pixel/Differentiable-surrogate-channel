@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     # Apply the "unknown" channel
     channel = AWGNChannel(snr_db=SNR_DB, pulse_energy=pulse_energy)
-    #channel = AWGNChannelWithLinearISI(snr_db=SNR_DB, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+    # channel = AWGNChannelWithLinearISI(snr_db=SNR_DB, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
     y = channel.forward(x)
 
     # Apply receiver
