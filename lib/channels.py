@@ -55,7 +55,5 @@ class AWGNChannelWithLinearISI(CommunicationChannel):
         self.noise_std = np.sqrt(pulse_energy / (2 * 10 ** (snr_db/ 10)))
 
     def forward(self, x: torch_types._TensorOrTensors):
-        print(f"Shape of x: {x.shape}")
-        print(f"Shape of self.isi_filter: {self.isi_filter.shape}")
         xisi = convolve(x, self.isi_filter, mode='same')
         return xisi + self.noise_std * torch.randn_like(xisi)
