@@ -1,0 +1,113 @@
+import numpy as np
+import torch
+import matplotlib.pyplot as plt
+import torchaudio.functional as taf
+from commpy.filters import rrcosfilter
+from scipy.special import erfc
+import numpy as np
+
+from lib.utility import estimate_delay, find_closest_symbol
+from lib.channels import AWGNChannel, AWGNChannelWithLinearISI
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
+
+# Assuming the rrcosfilter, AWGNChannel, estimate_delay, and find_closest_symbol functions/classes are defined as provided
+
+class LearnableFilter(nn.Module):
+    def __init__(self, sps, filter_length):
+        super(LearnableFilter, self).__init__()
+        self.conv = nn.Conv1d(1, 1, kernel_size=filter_length, stride=sps, padding=filter_length//2, bias=False)
+        # Initialize the filter weights
+        with torch.no_grad():
+            self.conv.weight.fill_(0)
+            self.conv.weight[0, 0, filter_length // 2] = 1
+
+    def forward(self, x):
+        x = x.unsqueeze(0).unsqueeze(0)  # Add batch and channel dimensions
+        return self.conv(x).squeeze(0).squeeze(0)  # Remove added dimensions
+
+if __name__ == "__main__":
+    SEED = 12345
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    
+    N_SYMBOLS = 100000
+    SPS = 8
+    SNR_DB = 4.0
+    BAUD_RATE = 10e6
+    FILTER_LENGTH = 256
+    Ts = 1 / BAUD_RATE
+    fs = BAUD_RATE * SPS
+
+    pam_symbols = np.array([-3, -1, 1, 3])
+    symbols_indices = np.random.randint(0, len(pam_symbols), N_SYMBOLS)
+    tx_symbols = torch.tensor(pam_symbols[symbols_indices], dtype=torch.float)
+    tx_symbols_upsampled = torch.zeros(N_SYMBOLS * SPS, dtype=torch.float)
+    tx_symbols_upsampled[::SPS] = tx_symbols
+
+    _, rrc_filter = rrcosfilter(FILTER_LENGTH, 0.5, Ts, fs)
+    rrc_filter = torch.from_numpy(rrc_filter).float()
+
+    pulse_energy = torch.sum(rrc_filter**2)
+    channel = AWGNChannel(SNR_DB, pulse_energy.item())
+
+    learnable_filter = LearnableFilter(SPS, FILTER_LENGTH)
+    optimizer = optim.Adam(learnable_filter.parameters(), lr=0.001)
+    criterion = nn.MSELoss()
+
+    epochs = 150  # For demonstration purposes
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        
+        # Apply learnable filter
+        shaped_symbols = learnable_filter(tx_symbols_upsampled)
+        
+        # Simulate AWGN channel transmission
+        received_symbols = channel.forward(shaped_symbols)
+
+        # Apply RRC filter at receiver
+        rx_filtered = F.conv1d(received_symbols.view(1, 1, -1), 
+                               rrc_filter.view(1, 1, -1), 
+                               padding=FILTER_LENGTH//2).view(-1)
+        
+        # Adjust for stride effect by correctly sampling the output
+        rx_sampled = rx_filtered[::SPS][:N_SYMBOLS]  # Adjusted line
+
+        closest_symbols = find_closest_symbol(rx_sampled, torch.tensor(pam_symbols, dtype=torch.float))
+        loss = criterion(rx_sampled, tx_symbols[:len(rx_sampled)])  # Adjusted line for matching tensor lengths
+        
+        loss.backward()
+        optimizer.step()
+        
+        if epoch % 10 == 0:
+            print(f'Epoch {epoch+1}/{epochs}, Loss: {loss.item()}')
+
+    # Correct length adjustment for rx_sampled before finding closest symbols
+    rx_sampled_adjusted = rx_filtered[::SPS]  # Adjusting by taking every SPS-th sample
+    if len(rx_sampled_adjusted) > N_SYMBOLS:
+        rx_sampled_adjusted = rx_sampled_adjusted[:N_SYMBOLS]  # Truncate if longer
+    elif len(rx_sampled_adjusted) < N_SYMBOLS:
+        # Handle case if rx_sampled_adjusted is shorter than expected (unlikely with correct padding and stride)
+        padding = N_SYMBOLS - len(rx_sampled_adjusted)
+        rx_sampled_adjusted = F.pad(rx_sampled_adjusted, (0, padding), "constant", 0)
+
+    closest_symbols = find_closest_symbol(rx_sampled_adjusted, torch.tensor(pam_symbols, dtype=torch.float))
+
+    # SER calculation should now work without size mismatch errors
+    SER = torch.mean((closest_symbols != tx_symbols).float()).item()
+    print(f"Symbol Error Rate (SER): {SER}")
+
+    # Plot the learned filter weights
+    plt.figure(figsize=(10, 4))
+    learned_weights = learnable_filter.conv.weight.data.squeeze().cpu().numpy()
+    plt.plot(learned_weights)
+    plt.title('Learned Filter Weights After Training')
+    plt.xlabel('Sample')
+    plt.ylabel('Weight')
+    plt.grid(True)
+    plt.show()

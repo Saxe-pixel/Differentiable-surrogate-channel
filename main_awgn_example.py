@@ -8,6 +8,8 @@ import torch
 import matplotlib.pyplot as plt
 import torchaudio.functional as taf
 from commpy.filters import rrcosfilter
+from scipy.special import erfc
+import numpy as np
 
 from lib.utility import estimate_delay, find_closest_symbol
 from lib.channels import AWGNChannel, AWGNChannelWithLinearISI
@@ -18,7 +20,7 @@ if __name__ == "__main__":
     SEED = 12345
     N_SYMBOLS = int(1e5)
     SPS = 8  # samples-per-symbol (oversampling rate)
-    SNR_DB = 4.0  # signal-to-noise ratio in dB
+    SNR_DB = 11.0  # signal-to-noise ratio in dB
     BAUD_RATE = 10e6  # number of symbols transmitted pr. second
     FILTER_LENGTH = 256
     Ts = 1 / (BAUD_RATE)  # symbol length
@@ -67,9 +69,24 @@ if __name__ == "__main__":
 
     # Count symbol errors
     symbol_error_rate = torch.sum(torch.logical_not(torch.eq(symbols_est, tx_symbols))) / len(tx_symbols)
-    print(f"SER: {symbol_error_rate:.3e}")
+    print(f"SER: {symbol_error_rate}")
 
     # FIXME: Implement the EsN0 dB theory.
+    M = 4  # Modulation order for 4-PAM
+    E_s = pulse_energy  # Symbol energy, assumed to be equal to the pulse energy for simplicity
+    log2M = np.log2(M)
+
+    # Convert SNR from dB to linear scale
+    SNR_linear = 10**(SNR_DB / 10)
+
+    # Calculate Eb/N0
+    Eb_N0_linear = SNR_linear / log2M
+
+    # Calculate theoretical SER for AWGN channel
+    Q = lambda x: 0.5 * erfc(x / np.sqrt(2))
+    SER_theoretical = 2 * (1 - 1/M) * Q(np.sqrt(2 * log2M * Eb_N0_linear))
+
+    print(f"Theoretical SER for AWGN channel: {SER_theoretical}")
 
     # Plot a subsegment of the transmitted signal and the pulse
     fig, ax = plt.subplots(nrows=2)
