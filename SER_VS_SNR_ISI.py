@@ -13,7 +13,7 @@ if __name__ == "__main__":
     SEED = 12345
     N_SYMBOLS = int(1e5)
     SPS = 8  # samples-per-symbol (oversampling rate)
-    SNR_DB_RANGE = np.linspace(0, 15, 16)  # signal-to-noise ratio in dB
+    SNR_DB_RANGE = np.linspace(0, 9, 10)  # signal-to-noise ratio in dB
     BAUD_RATE = 10e6  # number of symbols transmitted pr. second
     FILTER_LENGTH = 256
     Ts = 1 / (BAUD_RATE)  # symbol length
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     plt.xlabel('SNR (dB)')
     plt.ylabel('Symbol Error Rate (SER)')
     plt.title('SNR vs. SER Comparison')
-    plt.ylim(1e-6, 1e0)  # Setting y-axis limits
+    plt.ylim(1e-4, 1e0)  # Setting y-axis limits
     plt.grid(True)
     plt.legend()
     plt.show()

@@ -20,7 +20,7 @@ if __name__ == "__main__":
     SEED = 12345
     N_SYMBOLS = int(1e5)
     SPS = 8  # samples-per-symbol (oversampling rate)
-    SNR_DB_RANGE = np.linspace(0, 10, 11)  # signal-to-noise ratio in dB
+    SNR_DB_RANGE = np.linspace(0, 8, 9)  # signal-to-noise ratio in dB
     BAUD_RATE = 10e6  # number of symbols transmitted pr. second
     FILTER_LENGTH = 256
     Ts = 1 / (BAUD_RATE)  # symbol length
@@ -75,11 +75,11 @@ if __name__ == "__main__":
 
     # Plotting results
     plt.figure(figsize=(10, 5))
-    plt.plot(SNR_DB_RANGE, experimental_SER, 'o-', label='RRC-filter SER')
-    plt.plot(SNR_DB_RANGE, theoretical_SER, 's-', label='Theoretical SER')
+    plt.semilogy(SNR_DB_RANGE, experimental_SER, 'o-', label='Experimental SER (RRC-filter)')
+    plt.semilogy(SNR_DB_RANGE, theoretical_SER, 's-', label='Theoretical SER')
     plt.xlabel('SNR (dB)')
     plt.ylabel('Symbol Error Rate (SER)')
     plt.title('SNR vs. SER (AWGN Channel)')
-    plt.grid(True)
+    plt.grid(True, which="both", ls="--")  # Grid for both major and minor ticks
     plt.legend()
     plt.show()

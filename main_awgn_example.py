@@ -18,11 +18,11 @@ from lib.channels import AWGNChannel, AWGNChannelWithLinearISI
 if __name__ == "__main__":
     # Simulation parameters
     SEED = 12345
-    N_SYMBOLS = int(1e5)
+    N_SYMBOLS = int(2*1e5)
     SPS = 8  # samples-per-symbol (oversampling rate)
-    SNR_DB = 11.0  # signal-to-noise ratio in dB
+    SNR_DB = 4.0  # signal-to-noise ratio in dB
     BAUD_RATE = 10e6  # number of symbols transmitted pr. second
-    FILTER_LENGTH = 256
+    FILTER_LENGTH = 64
     Ts = 1 / (BAUD_RATE)  # symbol length
     fs = BAUD_RATE * SPS
 
