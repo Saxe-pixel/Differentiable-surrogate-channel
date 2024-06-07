@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from commpy.filters import rrcosfilter
 from lib.utility import estimate_delay, find_closest_symbol
-from lib.channels import AWGNChannel, AWGNChannelWithLinearISI
+from lib.channels import AWGNChannel, AWGNChannelWithLinearISI, WienerHammersteinISIChannel
 import torch.optim as optim
 from scipy.special import erfc
 
@@ -125,5 +125,5 @@ plt.xlabel("SNR (dB)")
 plt.ylabel("SER")
 plt.yscale("log")
 plt.legend()
-plt.grid()
+plt.grid(True)
 plt.show()
