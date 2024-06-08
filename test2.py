@@ -22,7 +22,7 @@ random_obj = np.random.default_rng(SEED)
 
 # Generate data - use Pulse Amplitude Modulation (PAM)
 pam_symbols = np.array([-3, -1, 1, 3])
-tx_symbols = torch.from_numpy(random_obj.choice(pam_symbols, size=(N_SYMBOLS,), replace=True)).to(device)
+tx_symbols = torch.from_numpy(random_obj.choice(pam_symbols, size=(N_SYMBOLS,), replace=True)).double().to(device)
 
 # Split the data into training and testing
 train_size = int(0.7 * N_SYMBOLS)
@@ -37,55 +37,34 @@ gg = np.convolve(g, g[::-1])
 pulse_rx = torch.from_numpy(g).double().to(device)  # Receiver pulse (fixed)
 pulse_energy = np.max(gg)
 
-# Define the pulse for the transmitter (to be optimized)
-pulse_tx = torch.zeros((FILTER_LENGTH,), dtype=torch.double).requires_grad_(True)
-
-# Define the pulse for the receiver (fixed)
-pulse_rx = torch.from_numpy(g).double()  # No requires_grad_() as it's not being optimized
-
-# Define training and evaluation functions
-def forward_pass(tx_symbols_input, optimized_pulse, channel, reciever_rx, padding):
-    tx_symbols_up = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double)
-    tx_symbols_up[0::SPS] = tx_symbols_input.double()
-    x = F.conv1d(tx_symbols_up.view(1, 1, -1), optimized_pulse.view(1, 1, -1), padding=padding)
-    y = channel.forward(x.squeeze())
-    rx = F.conv1d(y.view(1, 1, -1), reciever_rx.view(1, 1, -1).flip(dims=[2]), padding=padding).squeeze()
-    delay = estimate_delay(rx, SPS)
-    rx = rx[delay::SPS]
-    rx = rx[:tx_symbols_input.numel()]
-    return rx, tx_symbols_up
-
-# Neural Network for Pulse Shaping
-import torch.nn as nn
-
-class PulseShapeNet(nn.Module):
-    def __init__(self, filter_length):
-        super(PulseShapeNet, self).__init__()
-        self.pulse = nn.Parameter(torch.randn(filter_length, dtype=torch.float64, requires_grad=True))
+class InverseWHChannelNet(nn.Module):
+    def __init__(self, filter_length, num_filters=32, initial_non_linear_coefficients=(1.0, 0.2, -0.1)):
+        super(InverseWHChannelNet, self).__init__()
+        self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
+        self.conv2 = nn.Conv1d(num_filters, 1, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         
+        # Initialize the non-linear coefficients as learnable parameters
+        self.a0 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[0], dtype=torch.double))
+        self.a1 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[1], dtype=torch.double))
+        self.a2 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[2], dtype=torch.double))
+
+        # Initialize the weights of the convolutional layers
+        nn.init.xavier_uniform_(self.conv1.weight)
+        nn.init.xavier_uniform_(self.conv2.weight)
+
     def forward(self, x):
-        # x is the upsampled signal
-        return torch.nn.functional.conv1d(x.view(1, 1, -1), self.pulse.view(1, 1, -1), padding=self.pulse.shape[0] // 2)
+        x = self.conv1(x)
+        x = self.a0 * x + self.a1 * x ** 2 + self.a2 * x ** 3
+        x = self.conv2(x)
+        return x
 
-# class PulseShapeNet(nn.Module):
-#     def __init__(self, input_size, hidden_size, output_size):
-#         super(PulseShapeNet, self).__init__()
-#         self.fc1 = nn.Linear(input_size, hidden_size)
-#         self.relu = nn.ReLU()
-#         self.fc2 = nn.Linear(hidden_size, output_size)
-
-#     def forward(self, x):
-#         x = self.fc1(x)
-#         x = self.relu(x)
-#         x = self.fc2(x)
-#         return x
-
-def train_model(tx_symbols, network, receiver_rx, optimizer, channel, num_epochs, batch_size, sps):
+# Training Function
+def train_pulse_shaping_net(tx_symbols, network, receiver_rx, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
         permutation = torch.randperm(tx_symbols.size(0))
         total_loss = 0
         for i in range(0, tx_symbols.size(0), batch_size):
-            indices = permutation[i:i+batch_size]
+            indices = permutation[i:i + batch_size]
             batch_tx_symbols = tx_symbols[indices].double().to(device)
 
             optimizer.zero_grad()
@@ -97,8 +76,10 @@ def train_model(tx_symbols, network, receiver_rx, optimizer, channel, num_epochs
             # Forward pass through the network (pulse shaping)
             shaped_pulse = network(tx_symbols_up.view(1, 1, -1))
 
-            # Pass through the channel
+            # Pass through the actual WH channel
             y = channel.forward(shaped_pulse.squeeze())
+
+            # Pass through the receiver filter
             rx = torch.nn.functional.conv1d(y.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=receiver_rx.shape[0] // 2).squeeze()
 
             # Delay estimation and synchronization
@@ -116,15 +97,14 @@ def train_model(tx_symbols, network, receiver_rx, optimizer, channel, num_epochs
         print(f"Epoch {epoch + 1}, Average Loss: {total_loss / (i // batch_size + 1)}")
     return network
 
-
-
+# Evaluation Function
 def evaluate_model(tx_symbols_input, network, receiver_rx, channel, sps):
     with torch.no_grad():
         # Prepare input signal
         tx_symbols_up = torch.zeros((tx_symbols_input.numel() * sps,), dtype=torch.double).to(device)
         tx_symbols_up[0::sps] = tx_symbols_input.double()
 
-        # Forward pass through the network and channel
+        # Forward pass through the network and actual WH channel
         shaped_pulse = network(tx_symbols_up.view(1, 1, -1))
         y = channel.forward(shaped_pulse.squeeze())
         rx_eval = torch.nn.functional.conv1d(y.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=receiver_rx.shape[0] // 2).squeeze()
@@ -141,8 +121,7 @@ def evaluate_model(tx_symbols_input, network, receiver_rx, channel, sps):
         SER = error.float() / tx_symbols_input.numel()
         return SER
 
-
-
+# Theoretical SER Calculation
 def theoretical_ser(snr_db, pulse_energy, modulation_order):
     log2M = np.log2(modulation_order)
     SNR_linear = 10 ** (snr_db / 10)
@@ -151,12 +130,9 @@ def theoretical_ser(snr_db, pulse_energy, modulation_order):
     SER_theoretical = 2 * (1 - 1 / modulation_order) * Q(np.sqrt(2 * log2M * Eb_N0_linear))
     return SER_theoretical
 
-
-
-
-# Initialize network and optimizer
-pulse_shaper_net = PulseShapeNet(FILTER_LENGTH).double()
-optimizer = optim.Adam(pulse_shaper_net.parameters(), lr=0.001)
+# Initialize pulse shaping network and optimizer
+inverse_wh_net = InverseWHChannelNet(FILTER_LENGTH).to(device)
+optimizer = optim.Adam(inverse_wh_net.parameters(), lr=0.001)
 
 # SNR settings and results storage
 SNRs = range(0, 9)
@@ -164,37 +140,24 @@ num_epochs = 15
 batch_size = 1024
 
 theoretical_SERs = [theoretical_ser(snr_db, pulse_energy, 4) for snr_db in SNRs]
-awgn_SERs = []
-awgn_isi_SERs = []
 wh_isi_SERs = []
+
+# Initialize the actual WH channel
+wiener_hammerstein_channel = WienerHammersteinISIChannel(snr_db=10, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
 
 # Simulation loop
 for snr_db in SNRs:
     print(f"Training and evaluating at SNR: {snr_db} dB")
+    wiener_hammerstein_channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
     
-    # AWGN Channel
-    awgn_channel = AWGNChannel(snr_db=snr_db, pulse_energy=pulse_energy)
-    trained_network_awgn = train_model(train_symbols, pulse_shaper_net, pulse_rx, optimizer, awgn_channel, num_epochs, batch_size, SPS)
-    ser_awgn = evaluate_model(test_symbols, trained_network_awgn, pulse_rx, awgn_channel, SPS)
-    awgn_SERs.append(ser_awgn)
-    
-    # AWGN with Linear ISI Channel
-    awgn_isi_channel = AWGNChannelWithLinearISI(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-    trained_network_awgn_isi = train_model(train_symbols, pulse_shaper_net, pulse_rx, optimizer, awgn_isi_channel, num_epochs, batch_size, SPS)
-    ser_awgn_isi = evaluate_model(test_symbols, trained_network_awgn_isi, pulse_rx, awgn_isi_channel, SPS)
-    awgn_isi_SERs.append(ser_awgn_isi)
-    
-    # Wiener-Hammerstein ISI Channel
-    wh_channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS, dtype=torch.float64)
-    trained_network_wh = train_model(train_symbols, pulse_shaper_net, pulse_rx, optimizer, wh_channel, num_epochs, batch_size, SPS)
-    ser_wh = evaluate_model(test_symbols, trained_network_wh, pulse_rx, wh_channel, SPS)
+    # Train the pulse shaping network using the actual WH channel
+    trained_network_wh = train_pulse_shaping_net(train_symbols, inverse_wh_net, pulse_rx, optimizer, wiener_hammerstein_channel, num_epochs, batch_size, SPS)
+    ser_wh = evaluate_model(test_symbols, trained_network_wh, pulse_rx, wiener_hammerstein_channel, SPS)
     wh_isi_SERs.append(ser_wh)
 
 # Plotting results
 plt.figure(figsize=(12, 8))
 plt.plot(SNRs, theoretical_SERs, label="Theoretical SER", marker='o')
-plt.plot(SNRs, awgn_SERs, label="AWGN Channel SER", marker='x')
-plt.plot(SNRs, awgn_isi_SERs, label="AWGN with ISI Channel SER", marker='s')
 plt.plot(SNRs, wh_isi_SERs, label="WienerHammerstein ISI Channel SER", marker='d')
 plt.xlabel("SNR (dB)")
 plt.ylabel("Symbol Error Rate (SER)")
