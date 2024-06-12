@@ -37,26 +37,68 @@ gg = np.convolve(g, g[::-1])
 pulse_rx = torch.from_numpy(g).double().to(device)  # Receiver pulse (fixed)
 pulse_energy = np.max(gg)
 
-class InverseWHChannelNet(nn.Module):
-    def __init__(self, filter_length, num_filters=32, initial_non_linear_coefficients=(1.0, 0.2, -0.1)):
-        super(InverseWHChannelNet, self).__init__()
+class WHChannelNet(nn.Module):
+    def __init__(self, filter_length, num_filters=8, initial_non_linear_coefficients=(0,0,0)):
+        super(WHChannelNet, self).__init__()
         self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         self.conv2 = nn.Conv1d(num_filters, 1, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         
-        # Initialize the non-linear coefficients as learnable parameters
+        # Making non-linear coefficients learnable parameters
         self.a0 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[0], dtype=torch.double))
         self.a1 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[1], dtype=torch.double))
         self.a2 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[2], dtype=torch.double))
 
-        # Initialize the weights of the convolutional layers
+        # Initializing the weights of the convolutional layers randomly
         nn.init.xavier_uniform_(self.conv1.weight)
         nn.init.xavier_uniform_(self.conv2.weight)
 
     def forward(self, x):
+        # print("conv1 weights:", self.conv1.weight)
         x = self.conv1(x)
+        # print("non-linear coefficients:", self.a0, self.a1, self.a2)
         x = self.a0 * x + self.a1 * x ** 2 + self.a2 * x ** 3
+        # print("conv2 weights:", self.conv2.weight)
         x = self.conv2(x)
         return x
+
+# class WHChannelNet(nn.Module):
+#     def __init__(self, filter_length, num_filters=64, initial_non_linear_coefficients=(0.0, 0.0, 0.0)):
+#         super(WHChannelNet, self).__init__()
+#         self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
+#         self.conv2 = nn.Conv1d(num_filters, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
+#         self.conv3 = nn.Conv1d(num_filters, 1, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
+        
+#         # Adding batch normalization layers
+#         self.bn1 = nn.BatchNorm1d(num_filters, dtype=torch.double)
+#         self.bn2 = nn.BatchNorm1d(num_filters, dtype=torch.double)
+        
+#         # Adding residual connections
+#         self.residual = nn.Conv1d(1, num_filters, 1, bias=False, dtype=torch.double)
+        
+#         # Initialize the non-linear coefficients as learnable parameters
+#         self.a0 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[0], dtype=torch.double))
+#         self.a1 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[1], dtype=torch.double))
+#         self.a2 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[2], dtype=torch.double))
+
+#         # Initialize the weights of the convolutional layers
+#         nn.init.xavier_uniform_(self.conv1.weight)
+#         nn.init.xavier_uniform_(self.conv2.weight)
+#         nn.init.xavier_uniform_(self.conv3.weight)
+#         nn.init.xavier_uniform_(self.residual.weight)
+
+#     def forward(self, x):
+#         res = self.residual(x)
+#         x = self.conv1(x)
+#         x = self.bn1(x)
+#         x = F.relu(x)
+#         x = self.conv2(x)
+#         x = self.bn2(x)
+#         x = F.relu(x)
+#         x = x[:, :, :res.shape[2]]  # Ensure the size matches for residual connection
+#         x = x + res  # Residual connection
+#         x = self.a0 * x + self.a1 * x ** 2 + self.a2 * x ** 3
+#         x = self.conv3(x)
+#         return x
 
 # Training Function
 def train_pulse_shaping_net(tx_symbols, network, receiver_rx, optimizer, channel, num_epochs, batch_size, sps):
@@ -119,6 +161,7 @@ def evaluate_model(tx_symbols_input, network, receiver_rx, channel, sps):
         # Error calculation
         error = torch.sum(torch.logical_not(torch.eq(symbols_est, tx_symbols_input)))
         SER = error.float() / tx_symbols_input.numel()
+        print(f"Evaluation: Symbol Error Rate: {SER.item()}")
         return SER
 
 # Theoretical SER Calculation
@@ -131,13 +174,13 @@ def theoretical_ser(snr_db, pulse_energy, modulation_order):
     return SER_theoretical
 
 # Initialize pulse shaping network and optimizer
-inverse_wh_net = InverseWHChannelNet(FILTER_LENGTH).to(device)
+inverse_wh_net = WHChannelNet(FILTER_LENGTH).to(device)
 optimizer = optim.Adam(inverse_wh_net.parameters(), lr=0.001)
 
 # SNR settings and results storage
 SNRs = range(0, 9)
-num_epochs = 15
-batch_size = 1024
+num_epochs = 10
+batch_size = 512
 
 theoretical_SERs = [theoretical_ser(snr_db, pulse_energy, 4) for snr_db in SNRs]
 wh_isi_SERs = []
