@@ -1,23 +1,17 @@
 import numpy as np
 import torch
+import torch.nn as nn
 import matplotlib.pyplot as plt
 import torchaudio.functional as taf
 from commpy.filters import rrcosfilter
 import torch.nn.functional as F
 from lib.utility import estimate_delay, find_closest_symbol
-from lib.channels import AWGNChannel, AWGNChannelWithLinearISI
-import torch.optim as optim
-from lib.utility import estimate_delay, find_closest_symbol
 from lib.channels import AWGNChannel, AWGNChannelWithLinearISI, WienerHammersteinISIChannel
-import torch.nn as nn
 import torch.optim as optim
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = "cpu"
 
-
-
-
+device = torch.device("cpu")
 print(device)
+
 # Simulation parameters
 SEED = 12345
 N_SYMBOLS = int(2 * 1e5)
@@ -49,12 +43,12 @@ pulse_energy = np.max(gg)
 pulse_rx = torch.from_numpy(g).double().to(device)
 
 # Define h and H for Volterra series
-h_size = 7
-H_size = 7
-h = nn.Parameter(torch.randn(h_size, dtype=torch.double, device=device))
-H = nn.Parameter(torch.randn(H_size, H_size, dtype=torch.double, device=device))
+h_size = 19
+H_size = 19
+h = nn.Parameter(torch.randn(h_size, dtype=torch.double, device=device) * 0.01)
+H = nn.Parameter(torch.randn(H_size, H_size, dtype=torch.double, device=device) * 0.01)
 
-optimizer = torch.optim.Adam([h, H], lr=0.01)
+optimizer = torch.optim.Adam([h, H], lr=0.001)
 channel = WienerHammersteinISIChannel(snr_db=SNR_DB, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
 
 # Move channel filters to the correct device and data type
@@ -63,7 +57,7 @@ channel.isi_filter2 = channel.isi_filter2.to(device=device, dtype=torch.double)
 
 # Calculate padding to achieve "same" output length
 sym_trim = FILTER_LENGTH // 2 // SPS
-num_epochs = 5  # Number of iterations for optimization
+num_epochs = 15  # Number of iterations for optimization
 batch_size = 512  # Batch size for optimization
 
 def volterra(x, h, H):
@@ -82,7 +76,7 @@ def volterra(x, h, H):
 
     return y_t
 
-def forward_pass(tx_symbols_input, channel, reciever_rx, h, H, padding):
+def forward_pass(tx_symbols_input, channel, receiver_rx, h, H, padding):
     # Upsample
     tx_symbols_up = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double, device=device)
     tx_symbols_up[0::SPS] = tx_symbols_input.double()
@@ -94,13 +88,13 @@ def forward_pass(tx_symbols_input, channel, reciever_rx, h, H, padding):
     y = channel.forward(x)
 
     # Apply receiver with consistent padding
-    rx = F.conv1d(y.view(1, 1, -1), reciever_rx.view(1, 1, -1).flip(dims=[2]), padding=padding).squeeze()
+    rx = F.conv1d(y.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=padding).squeeze()
     delay = estimate_delay(rx, SPS)
     rx = rx[delay::SPS]
     rx = rx[:tx_symbols_input.numel()]
     return rx, tx_symbols_up
 
-def train_model(tx_symbols, reciever_rx, h, H, optimizer, channel, num_epochs, batch_size):
+def train_model(tx_symbols, receiver_rx, h, H, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
         permutation = torch.randperm(train_size, device=device)
         for i in range(0, train_size, batch_size):
@@ -108,7 +102,7 @@ def train_model(tx_symbols, reciever_rx, h, H, optimizer, channel, num_epochs, b
             batch_tx_symbols = tx_symbols[indices].double()
 
             optimizer.zero_grad()
-            rx, _ = forward_pass(batch_tx_symbols, channel, reciever_rx, h, H, reciever_rx.shape[0] // 2)
+            rx, _ = forward_pass(batch_tx_symbols, channel, receiver_rx, h, H, receiver_rx.shape[0] // 2)
 
             # Compute loss
             min_length = min(len(rx), len(batch_tx_symbols))
@@ -121,7 +115,7 @@ def train_model(tx_symbols, reciever_rx, h, H, optimizer, channel, num_epochs, b
         print(f"Epoch {epoch+1}, Loss: {loss.item()}")
     return h, H
 
-def evaluate_model(tx_symbols_input, reciever_rx, h, H, channel, padding):
+def evaluate_model(tx_symbols_input, receiver_rx, h, H, channel, padding):
     with torch.no_grad():
         tx_symbols_eval = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double, device=device)
         tx_symbols_eval[0::SPS] = tx_symbols_input.double()
@@ -133,16 +127,18 @@ def evaluate_model(tx_symbols_input, reciever_rx, h, H, channel, padding):
         y = channel.forward(x)
 
         # Apply receiver with consistent padding
-        rx_eval = F.conv1d(y.view(1, 1, -1), reciever_rx.view(1, 1, -1).flip(dims=[2]), padding=padding).squeeze()
+        rx_eval = F.conv1d(y.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=padding).squeeze()
 
         delay = estimate_delay(rx_eval, SPS)
-        symbols_est = rx_eval[delay::SPS]
-        symbols_est = symbols_est[:test_size]
-        symbols_est = find_closest_symbol(symbols_est, torch.from_numpy(pam_symbols).to(device))
+        rx_eval = rx_eval[delay::SPS]
+        rx_eval = rx_eval[:tx_symbols_input.numel()]
+
+        # Symbol estimation
+        symbols_est = find_closest_symbol(rx_eval, torch.from_numpy(pam_symbols).to(device))
 
         # Calculate errors and SER
-        error = torch.sum(torch.logical_not(torch.eq(symbols_est, tx_symbols_input)))
-        SER = error.float() / len(tx_symbols_input)
+        error = torch.sum(symbols_est != tx_symbols_input[:len(symbols_est)])
+        SER = error.float() / len(symbols_est)
         return SER
 
 h, H = train_model(train_symbols, pulse_rx, h, H, optimizer, channel, num_epochs, batch_size)
