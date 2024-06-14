@@ -43,10 +43,10 @@ pulse_energy = np.max(gg)
 pulse_rx = torch.from_numpy(g).double().to(device)
 
 # Define h and H for Volterra series
-h_size = 19
-H_size = 19
-h = nn.Parameter(torch.randn(h_size, dtype=torch.double, device=device) * 0.01)
-H = nn.Parameter(torch.randn(H_size, H_size, dtype=torch.double, device=device) * 0.01)
+h_size = 25
+H_size = 15
+h = nn.Parameter(torch.zeros(h_size, dtype=torch.double, device=device) * 0.01)
+H = nn.Parameter(torch.zeros(H_size, H_size, dtype=torch.double, device=device) * 0.01)
 
 optimizer = torch.optim.Adam([h, H], lr=0.001)
 channel = WienerHammersteinISIChannel(snr_db=SNR_DB, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
@@ -57,7 +57,7 @@ channel.isi_filter2 = channel.isi_filter2.to(device=device, dtype=torch.double)
 
 # Calculate padding to achieve "same" output length
 sym_trim = FILTER_LENGTH // 2 // SPS
-num_epochs = 15  # Number of iterations for optimization
+num_epochs = 30  # Number of iterations for optimization
 batch_size = 512  # Batch size for optimization
 
 def volterra(x, h, H):
@@ -139,8 +139,15 @@ def evaluate_model(tx_symbols_input, receiver_rx, h, H, channel, padding):
         # Calculate errors and SER
         error = torch.sum(symbols_est != tx_symbols_input[:len(symbols_est)])
         SER = error.float() / len(symbols_est)
-        return SER
+        return SER, rx_eval
 
 h, H = train_model(train_symbols, pulse_rx, h, H, optimizer, channel, num_epochs, batch_size)
-SER = evaluate_model(test_symbols, pulse_rx, h, H, channel, pulse_rx.shape[0] // 2)
+SER, rx_eval = evaluate_model(test_symbols, pulse_rx, h, H, channel, pulse_rx.shape[0] // 2)
 print(f"SER: {SER}")
+
+plt.hist(rx_eval.cpu().numpy(), bins=50, alpha=0.75)
+plt.title('Histogram of Predicted Values (rx_eval)')
+plt.xlabel('Value')
+plt.ylabel('Frequency')
+plt.grid(True)
+plt.show()
