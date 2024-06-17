@@ -336,7 +336,7 @@ import time
 def run_simulation():
     num_epochs = 5
     batch_size = 512
-    num_runs = 8
+    num_runs = 5
     SNR = 5
 
     # Ranges for different models
