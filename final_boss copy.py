@@ -334,14 +334,16 @@ def evaluate_combined_model(tx_symbols_input, network_tx, network_rx, channel, s
 def run_simulation():
     num_epochs = 5
     batch_size = 512
-    num_runs = 3
+    num_runs = 8
     SNR = 10
 
     # Ranges for different models
-    h_H_sizes = range(4, 44, 4)
+    h_H_sizes = range(4, 45, 4)
     filter_length = 64
     num_filters_range = range(1, 17, 2)
     num_filters_range_complex = range(1, 6)
+    num_filters_range_combined = range(1, 6)
+    num_filters_range_complex_combined = range(1, 4)
 
     ser_results_volterra = []
     ser_results_tx = []
@@ -428,7 +430,7 @@ def run_simulation():
         ser_results_rx_complex.append((num_parameters, ser_avg))
 
     # Combined optimization model
-    for num_filters in num_filters_range:
+    for num_filters in num_filters_range_combined:
         ser_avg = 0.0
         for run in range(num_runs):
             print(f"Combined - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
@@ -444,7 +446,7 @@ def run_simulation():
         ser_results_combined.append((num_parameters, ser_avg))
 
     # Combined optimization model with WHChannelComplex
-    for num_filters in num_filters_range_complex:
+    for num_filters in num_filters_range_complex_combined:
         ser_avg = 0.0
         for run in range(num_runs):
             print(f"Combined (WHChannelComplex) - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
@@ -493,7 +495,7 @@ def run_simulation():
     plt.xlabel("Number of Parameters")
     plt.ylabel("Symbol Error Rate (SER)")
     plt.yscale("log")
-    plt.title("SER vs. Number of Parameters for Different Models")
+    plt.title(f"SER vs. Number of Parameters for Different Models at SNR = {SNR}")
     plt.legend()
     plt.grid(True)
     plt.show()
