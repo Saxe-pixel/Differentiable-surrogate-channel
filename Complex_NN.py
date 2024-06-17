@@ -61,9 +61,9 @@ pulse_energy = np.max(gg)
 #         x = self.conv2(x)
 #         return x
 
-class WHChannelNet(nn.Module):
+class WHChannelNetComplex(nn.Module):
     def __init__(self, filter_length, num_filters=64, initial_non_linear_coefficients=(0.0, 0.0, 0.0)):
-        super(WHChannelNet, self).__init__()
+        super(WHChannelNetComplex, self).__init__()
         self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         self.conv2 = nn.Conv1d(num_filters, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         self.conv3 = nn.Conv1d(num_filters, 1, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
