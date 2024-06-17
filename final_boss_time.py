@@ -344,7 +344,7 @@ def run_simulation():
     filter_length = 64
     num_filters_range = range(1, 17, 2)
     num_filters_range_complex = range(1, 6)
-    num_filters_range_combined = range(1, 6)
+    num_filters_range_combined = range(1, 9)
     num_filters_range_complex_combined = range(1, 4)
 
     ser_results_volterra = []
@@ -571,7 +571,7 @@ def run_simulation():
     plt.ylabel("Symbol Error Rate (SER)")
     plt.yscale("log")
     plt.title(f"SER vs. Number of Parameters for Different Models at SNR = {SNR}")
-    plt.legend()
+    plt.legend(ncol=2)
     plt.grid(True)
     plt.show()
 
@@ -609,7 +609,7 @@ def run_simulation():
     plt.xlabel("Number of Parameters")
     plt.ylabel("Training Time (s)")
     plt.title(f"Training Time vs. Number of Parameters for Different Models at SNR = {SNR}")
-    plt.legend()
+    plt.legend(ncol=2)
     plt.grid(True)
     plt.show()
 
