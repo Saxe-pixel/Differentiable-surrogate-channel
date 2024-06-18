@@ -133,7 +133,7 @@ class WHChannelNetComplex(nn.Module):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def train_volterra_model(tx_symbols, receiver_rx, h, H, optimizer, channel, num_epochs, batch_size):
+def train_volterra_model(train_symbols, receiver_rx, h, H, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
         permutation = torch.randperm(train_symbols.size(0))
         for i in range(0, train_symbols.size(0), batch_size):
@@ -166,13 +166,13 @@ def evaluate_volterra_model(tx_symbols_input, receiver_rx, h, H, channel, paddin
         print(f"Volterra - Evaluation SER: {SER.item()}")
         return SER
 
-def train_volterra_receiver_model(tx_symbols, tx_pulse, h, H, optimizer, channel, num_epochs, batch_size):
+def train_volterra_receiver_model(train_symbols, tx_pulse, h, H, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
-        permutation = torch.randperm(tx_symbols.size(0))
+        permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
-        for i in range(0, tx_symbols.size(0), batch_size):
+        for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i + batch_size]
-            batch_tx_symbols = tx_symbols[indices].double().to(device)
+            batch_tx_symbols = train_symbols[indices].double().to(device)
             optimizer.zero_grad()
 
             # Upsample input symbols
@@ -180,12 +180,12 @@ def train_volterra_receiver_model(tx_symbols, tx_pulse, h, H, optimizer, channel
             tx_symbols_up[0::SPS] = batch_tx_symbols
 
             # Transmit through the fixed pulse shaping filter
-            shaped_pulse = torch.nn.functional.conv1d(tx_symbols_up.view(1, 1, -1), tx_pulse.view(1, 1, -1), padding=tx_pulse.shape[0] // 2)
+            shaped_pulse = F.conv1d(tx_symbols_up.view(1, 1, -1), tx_pulse.view(1, 1, -1), padding=tx_pulse.shape[0] // 2).squeeze()
 
             # Pass through the actual WH channel
-            y = channel.forward(shaped_pulse.squeeze())
+            y = channel.forward(shaped_pulse)
 
-            # Forward pass through the volterra receiver
+            # Forward pass through the Volterra receiver
             rx = volterra(y, h, H)
 
             # Delay estimation and synchronization
@@ -194,7 +194,7 @@ def train_volterra_receiver_model(tx_symbols, tx_pulse, h, H, optimizer, channel
             rx = rx[:batch_tx_symbols.numel()]
 
             # Loss calculation and backpropagation
-            loss = torch.nn.functional.mse_loss(rx, batch_tx_symbols)
+            loss = F.mse_loss(rx, batch_tx_symbols)
             loss.backward()
             optimizer.step()
 
@@ -210,12 +210,12 @@ def evaluate_volterra_receiver_model(tx_symbols_input, tx_pulse, h, H, channel, 
         tx_symbols_up[0::sps] = tx_symbols_input.double()
 
         # Transmit through the fixed pulse shaping filter
-        shaped_pulse = torch.nn.functional.conv1d(tx_symbols_up.view(1, 1, -1), tx_pulse.view(1, 1, -1), padding=tx_pulse.shape[0] // 2)
+        shaped_pulse = F.conv1d(tx_symbols_up.view(1, 1, -1), tx_pulse.view(1, 1, -1), padding=tx_pulse.shape[0] // 2).squeeze()
 
         # Pass through the actual WH channel
-        y = channel.forward(shaped_pulse.squeeze())
+        y = channel.forward(shaped_pulse)
 
-        # Forward pass through the volterra receiver
+        # Forward pass through the Volterra receiver
         rx_eval = volterra(y, h, H)
 
         # Delay estimation and synchronization
@@ -223,21 +223,21 @@ def evaluate_volterra_receiver_model(tx_symbols_input, tx_pulse, h, H, channel, 
         symbols_est = rx_eval[delay::sps][:tx_symbols_input.numel()]
 
         # Symbol decision
-        symbols_est = find_closest_symbol(symbols_est, torch.from_numpy(pam_symbols))
+        symbols_est = find_closest_symbol(symbols_est, torch.from_numpy(pam_symbols).to(device))
 
         # Error calculation
-        error = torch.sum(torch.logical_not(torch.eq(symbols_est, tx_symbols_input)))
-        SER = error.float() / tx_symbols_input.numel()
+        error = torch.sum(symbols_est != tx_symbols_input[:len(symbols_est)])
+        SER = error.float() / len(symbols_est)
         print(f"Volterra Receiver - Evaluation SER: {SER.item()}")
         return SER
 
-def train_combined_volterra_model(tx_symbols, receiver_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size):
+def train_combined_volterra_model(train_symbols, receiver_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
-        permutation = torch.randperm(tx_symbols.size(0))
+        permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
-        for i in range(0, tx_symbols.size(0), batch_size):
+        for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i + batch_size]
-            batch_tx_symbols = tx_symbols[indices].double().to(device)
+            batch_tx_symbols = train_symbols[indices].double().to(device)
             optimizer.zero_grad()
 
             # Upsample input symbols
@@ -297,13 +297,13 @@ def evaluate_combined_volterra_model(tx_symbols_input, receiver_rx, h_tx, H_tx, 
         print(f"Combined Volterra - Evaluation SER: {SER.item()}")
         return SER
 
-def train_model(tx_symbols, network, receiver_rx, optimizer, channel, num_epochs, batch_size, sps):
+def train_model(train_symbols, network, receiver_rx, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
-        permutation = torch.randperm(tx_symbols.size(0))
+        permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
-        for i in range(0, tx_symbols.size(0), batch_size):
+        for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i + batch_size]
-            batch_tx_symbols = tx_symbols[indices].double().to(device)
+            batch_tx_symbols = train_symbols[indices].double().to(device)
             optimizer.zero_grad()
             tx_symbols_up = torch.zeros((batch_tx_symbols.numel() * sps,), dtype=torch.double).to(device)
             tx_symbols_up[0::sps] = batch_tx_symbols
@@ -335,13 +335,13 @@ def evaluate_model(tx_symbols_input, network, receiver_rx, channel, sps):
         print(f"Transmitter - Evaluation SER: {SER.item()}")
         return SER
 
-def train_receiver_model(tx_symbols, tx_pulse, network, optimizer, channel, num_epochs, batch_size, sps):
+def train_receiver_model(train_symbols, tx_pulse, network, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
-        permutation = torch.randperm(tx_symbols.size(0))
+        permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
-        for i in range(0, tx_symbols.size(0), batch_size):
+        for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i + batch_size]
-            batch_tx_symbols = tx_symbols[indices].double().to(device)
+            batch_tx_symbols = train_symbols[indices].double().to(device)
             optimizer.zero_grad()
 
             # Upsample input symbols
@@ -400,13 +400,13 @@ def evaluate_receiver_model(tx_symbols_input, tx_pulse, network, channel, sps):
         print(f"Receiver - Evaluation SER: {SER.item()}")
         return SER
 
-def train_combined_model(tx_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, sps):
+def train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
-        permutation = torch.randperm(tx_symbols.size(0))
+        permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
-        for i in range(0, tx_symbols.size(0), batch_size):
+        for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i + batch_size]
-            batch_tx_symbols = tx_symbols[indices].double().to(device)
+            batch_tx_symbols = train_symbols[indices].double().to(device)
             optimizer.zero_grad()
 
             # Upsample input symbols
@@ -483,7 +483,7 @@ def run_simulation():
     num_filters_range_combined = range(1, 9)
     num_filters_range_complex_combined = range(1, 4)
 
-    # h_H_sizes = range(4, 21, 4)
+    # h_H_sizes = range(4, 29, 4)
     # h_H_sizes_combined = range(4, 17, 4)
     # filter_length = 64
     # num_filters_range = range(1, 5, 2)
@@ -538,10 +538,10 @@ def run_simulation():
             optimizer = torch.optim.Adam([h, H], lr=0.001)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
             h, H = train_volterra_receiver_model(train_symbols, pulse_tx, h, H, optimizer, channel, num_epochs, batch_size)
-            
-            SER = evaluate_volterra_receiver_model(test_symbols, pulse_tx, h, H, channel, SPS)
+
+            SER = evaluate_volterra_receiver_model(test_symbols, pulse_tx, h, H, channel, pulse_rx.shape[0] // 2)
             ser_avg += SER.item()
-        
+
         ser_avg /= num_runs
         num_parameters = h.numel() + H.numel()
         ser_results_volterra_rx.append((num_parameters, ser_avg))
