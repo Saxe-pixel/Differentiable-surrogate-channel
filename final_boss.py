@@ -230,46 +230,57 @@ def evaluate_volterra_receiver_model(tx_symbols_input, tx_pulse, h, H, channel, 
         print(f"Volterra Receiver - Evaluation SER: {SER.item()}")
         return SER
 
-def train_combined_volterra_model(tx_symbols, receiver_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size):
+def train_combined_volterra_model(train_symbols, receiver_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
         permutation = torch.randperm(train_symbols.size(0))
         for i in range(0, train_symbols.size(0), batch_size):
-            indices = permutation[i:i+batch_size]
+            indices = permutation[i:i + batch_size]
             batch_tx_symbols = train_symbols[indices].double().to(device)
             optimizer.zero_grad()
-            rx, tx_symbols_up = forward_pass(batch_tx_symbols, channel, receiver_rx, h_tx, H_tx, receiver_rx.shape[0] // 2)
-
-            # Apply Volterra receiver
+            # Forward pass through the transmitter Volterra model
+            tx_symbols_up = torch.zeros((batch_tx_symbols.numel() * SPS,), dtype=torch.double).to(device)
+            tx_symbols_up[0::SPS] = batch_tx_symbols
+            x = volterra(tx_symbols_up, h_tx, H_tx)
+            # Simulate the channel
+            y = channel.forward(x)
+            # Apply receiver with consistent padding
+            rx = F.conv1d(y.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=receiver_rx.shape[0] // 2).squeeze()
+            # Apply receiver Volterra model
             rx = volterra(rx, h_rx, H_rx)
-
-            min_length = min(len(rx), len(batch_tx_symbols))
-            rx = rx[:min_length]
-            batch_tx_symbols = batch_tx_symbols[:min_length]
+            # Delay estimation and synchronization
+            delay = estimate_delay(rx, SPS)
+            rx = rx[delay::SPS]
+            rx = rx[:batch_tx_symbols.numel()]
+            # Loss calculation and backpropagation
             loss = F.mse_loss(rx, batch_tx_symbols)
             loss.backward()
             optimizer.step()
         print(f"Combined Volterra - Epoch {epoch + 1}, Loss: {loss.item()}")
     return h_tx, H_tx, h_rx, H_rx
 
-def evaluate_combined_volterra_model(tx_symbols_input, receiver_rx, h_tx, H_tx, h_rx, H_rx, channel, padding):
+
+def evaluate_combined_volterra_model(test_symbols, receiver_rx, h_tx, H_tx, h_rx, H_rx, channel, padding):
     with torch.no_grad():
-        tx_symbols_eval = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double).to(device)
-        tx_symbols_eval[0::SPS] = tx_symbols_input.double()
+        tx_symbols_eval = torch.zeros((test_symbols.numel() * SPS,), dtype=torch.double).to(device)
+        tx_symbols_eval[0::SPS] = test_symbols.double()
+        # Forward pass through the transmitter Volterra model
         x = volterra(tx_symbols_eval, h_tx, H_tx)
+        # Simulate the channel
         y = channel.forward(x)
+        # Apply receiver with consistent padding
         rx_eval = F.conv1d(y.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=padding).squeeze()
+        # Apply receiver Volterra model
+        rx_eval = volterra(rx_eval, h_rx, H_rx)
+        # Delay estimation and synchronization
         delay = estimate_delay(rx_eval, SPS)
         rx_eval = rx_eval[delay::SPS]
-        rx_eval = rx_eval[:tx_symbols_input.numel()]
-
-        # Apply Volterra receiver
-        rx_eval = volterra(rx_eval, h_rx, H_rx)
-
+        rx_eval = rx_eval[:test_symbols.numel()]
         symbols_est = find_closest_symbol(rx_eval, torch.from_numpy(pam_symbols).to(device))
-        error = torch.sum(symbols_est != tx_symbols_input[:len(symbols_est)])
+        error = torch.sum(symbols_est != test_symbols[:len(symbols_est)])
         SER = error.float() / len(symbols_est)
         print(f"Combined Volterra - Evaluation SER: {SER.item()}")
         return SER
+
 
 def train_model(tx_symbols, network, receiver_rx, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
@@ -447,7 +458,7 @@ def run_simulation():
     num_epochs = 5
     batch_size = 512
     num_runs = 5
-    SNR = 5
+    SNR = 20
 
     # Ranges for different models
     h_H_sizes = range(4, 45, 4)
