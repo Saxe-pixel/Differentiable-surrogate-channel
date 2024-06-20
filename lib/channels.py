@@ -69,7 +69,7 @@ class WienerHammersteinISIChannel(CommunicationChannel):
 
     """
     # Nedenfor normalt: non_linear_coefficients=(1.0, 0.2, -0.1)
-    def __init__(self, snr_db, pulse_energy, samples_pr_symbol, non_linear_coefficients=(1.0, 0.2, -0.01), dtype=torch.float64) -> None:
+    def __init__(self, snr_db, pulse_energy, samples_pr_symbol, non_linear_coefficients=(1.0, 0.2, -0.1), dtype=torch.float64) -> None:
         super().__init__()
         isi_filter1 = [1.0, 0.3, 0.1]  # simple minimum phase with zeros at (0.2, -0.5)
         isi_filter2 = [ 1., -0.2, 0.02]  # simple minimum phase with zeros at (0.1 \pm j 0.1)

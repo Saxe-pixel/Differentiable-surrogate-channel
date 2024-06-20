@@ -471,25 +471,25 @@ import random
 def run_simulation():
     num_epochs = 5
     batch_size = 512
-    num_runs = 5
-    SNR = 10
+    num_runs = 1
+    SNR = 20
 
     # Ranges for different models
-    h_H_sizes = range(4, 45, 4)
-    h_H_sizes_combined = range(4, 33, 4)
-    filter_length = 64
-    num_filters_range = range(1, 17, 2)
-    num_filters_range_complex = range(1, 6)
-    num_filters_range_combined = range(1, 9)
-    num_filters_range_complex_combined = range(1, 4)
-
-    # h_H_sizes = range(4, 29, 4)
-    # h_H_sizes_combined = range(4, 17, 4)
+    # h_H_sizes = range(4, 45, 4)
+    # h_H_sizes_combined = range(4, 33, 4)
     # filter_length = 64
-    # num_filters_range = range(1, 5, 2)
-    # num_filters_range_complex = range(1, 3)
-    # num_filters_range_combined = range(1, 4)
-    # num_filters_range_complex_combined = range(1, 3)
+    # num_filters_range = range(1, 17, 2)
+    # num_filters_range_complex = range(1, 6)
+    # num_filters_range_combined = range(1, 9)
+    # num_filters_range_complex_combined = range(1, 4)
+
+    h_H_sizes = range(4, 29, 4)
+    h_H_sizes_combined = range(4, 17, 4)
+    filter_length = 64
+    num_filters_range = range(1, 5, 2)
+    num_filters_range_complex = range(1, 3)
+    num_filters_range_combined = range(1, 4)
+    num_filters_range_complex_combined = range(1, 3)
 
     ser_results_volterra = []
     ser_results_volterra_rx = []
@@ -539,7 +539,7 @@ def run_simulation():
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
             h, H = train_volterra_receiver_model(train_symbols, pulse_tx, h, H, optimizer, channel, num_epochs, batch_size)
 
-            SER = evaluate_volterra_receiver_model(test_symbols, pulse_tx, h, H, channel, pulse_rx.shape[0] // 2)
+            SER = evaluate_volterra_receiver_model(test_symbols, pulse_tx, h, H, channel, SPS)
             ser_avg += SER.item()
 
         ser_avg /= num_runs
