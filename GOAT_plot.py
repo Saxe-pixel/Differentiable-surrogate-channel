@@ -472,7 +472,7 @@ def run_simulation():
     num_epochs = 5
     batch_size = 512
     num_runs = 5
-    SNR = 5
+    SNR = 20
 
     # Ranges for different models
     h_H_sizes = range(4, 45, 4)
