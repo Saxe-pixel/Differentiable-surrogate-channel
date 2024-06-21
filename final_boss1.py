@@ -471,25 +471,25 @@ import random
 def run_simulation():
     num_epochs = 5
     batch_size = 512
-    num_runs = 5
+    num_runs = 1
     SNR = 20
 
     # Ranges for different models
-    h_H_sizes = range(4, 45, 4)
-    h_H_sizes_combined = range(4, 33, 4)
-    filter_length = 64
-    num_filters_range = range(1, 17, 2)
-    num_filters_range_complex = range(1, 6)
-    num_filters_range_combined = range(1, 9)
-    num_filters_range_complex_combined = range(1, 4)
-
-    # h_H_sizes = range(4, 29, 4)
-    # h_H_sizes_combined = range(4, 17, 4)
+    # h_H_sizes = range(4, 45, 4)
+    # h_H_sizes_combined = range(4, 33, 4)
     # filter_length = 64
-    # num_filters_range = range(1, 5, 2)
-    # num_filters_range_complex = range(1, 3)
-    # num_filters_range_combined = range(1, 4)
-    # num_filters_range_complex_combined = range(1, 3)
+    # num_filters_range = range(1, 17, 2)
+    # num_filters_range_complex = range(1, 6)
+    # num_filters_range_combined = range(1, 9)
+    # num_filters_range_complex_combined = range(1, 4)
+
+    h_H_sizes = range(12, 29, 4)
+    h_H_sizes_combined = range(12, 17, 4)
+    filter_length = 64
+    num_filters_range = range(1, 5, 2)
+    num_filters_range_complex = range(1, 3)
+    num_filters_range_combined = range(1, 4)
+    num_filters_range_complex_combined = range(1, 3)
 
     ser_results_volterra = []
     ser_results_volterra_rx = []
