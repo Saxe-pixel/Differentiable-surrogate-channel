@@ -14,16 +14,21 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Simulation parameters
 SEED = 12345
-N_SYMBOLS = int(2 * 1e5)
+N_SYMBOLS = int(5 * 1e5)
 SPS = 8  # Samples-per-symbol (oversampling rate)
 BAUD_RATE = 10e6  # Number of symbols transmitted per second
 Ts = 1 / BAUD_RATE  # Symbol length
 fs = BAUD_RATE * SPS
-random_obj = np.random.default_rng(SEED)
+
+def set_random_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 # Generate data - use Pulse Amplitude Modulation (PAM)
 pam_symbols = np.array([-3, -1, 1, 3])
-tx_symbols = torch.from_numpy(random_obj.choice(pam_symbols, size=(N_SYMBOLS,), replace=True)).double().to(device)
+tx_symbols = torch.from_numpy(np.random.choice(pam_symbols, size=(N_SYMBOLS,), replace=True)).double().to(device)
 
 # Split the data into training and testing
 train_size = int(0.7 * N_SYMBOLS)
@@ -73,7 +78,7 @@ def forward_pass(tx_symbols_input, channel, receiver_rx, h, H, padding):
     return rx, tx_symbols_up
 
 class WHChannelNet(nn.Module):
-    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0,0,0)):
+    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0,0,0), seed=None):
         super(WHChannelNet, self).__init__()
         self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         self.conv2 = nn.Conv1d(num_filters, 1, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
@@ -82,6 +87,11 @@ class WHChannelNet(nn.Module):
         self.a1 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[1], dtype=torch.double))
         self.a2 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[2], dtype=torch.double))
 
+        if seed is not None:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        
         nn.init.xavier_uniform_(self.conv1.weight)
         nn.init.xavier_uniform_(self.conv2.weight)
 
@@ -92,7 +102,7 @@ class WHChannelNet(nn.Module):
         return x
 
 class WHChannelNetComplex(nn.Module):
-    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0.0, 0.0, 0.0)):
+    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0.0, 0.0, 0.0), seed=None):
         super(WHChannelNetComplex, self).__init__()
         self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         self.conv2 = nn.Conv1d(num_filters, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
@@ -109,6 +119,11 @@ class WHChannelNetComplex(nn.Module):
         self.a0 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[0], dtype=torch.double))
         self.a1 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[1], dtype=torch.double))
         self.a2 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[2], dtype=torch.double))
+
+        if seed is not None:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
 
         # Initialize the weights of the convolutional layers
         nn.init.xavier_uniform_(self.conv1.weight)
@@ -470,7 +485,7 @@ import random
 # Training and evaluation settings
 num_epochs = 5
 batch_size = 512
-num_runs = 3
+num_runs = 5
 SNRs = range(0, 21, 2)
 
 # Placeholder for SER results
