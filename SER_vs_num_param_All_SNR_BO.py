@@ -8,23 +8,26 @@ import matplotlib.pyplot as plt
 from commpy.filters import rrcosfilter
 from lib.utility import estimate_delay, find_closest_symbol
 from lib.channels import WienerHammersteinISIChannel
-import torch.optim.lr_scheduler as lr_scheduler  # Import the learning rate scheduler
 
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Simulation parameters
-SEED = 12345
-N_SYMBOLS = int(2 * 1e5)
+N_SYMBOLS = int(5 * 1e5)
 SPS = 8  # Samples-per-symbol (oversampling rate)
 BAUD_RATE = 10e6  # Number of symbols transmitted per second
 Ts = 1 / BAUD_RATE  # Symbol length
 fs = BAUD_RATE * SPS
-random_obj = np.random.default_rng(SEED)
+
+def set_random_seed(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 # Generate data - use Pulse Amplitude Modulation (PAM)
 pam_symbols = np.array([-3, -1, 1, 3])
-tx_symbols = torch.from_numpy(random_obj.choice(pam_symbols, size=(N_SYMBOLS,), replace=True)).double().to(device)
+tx_symbols = torch.from_numpy(np.random.choice(pam_symbols, size=(N_SYMBOLS,), replace=True)).double().to(device)
 
 # Split the data into training and testing
 train_size = int(0.7 * N_SYMBOLS)
@@ -74,7 +77,7 @@ def forward_pass(tx_symbols_input, channel, receiver_rx, h, H, padding):
     return rx, tx_symbols_up
 
 class WHChannelNet(nn.Module):
-    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0,0,0)):
+    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0,0,0), seed=None):
         super(WHChannelNet, self).__init__()
         self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         self.conv2 = nn.Conv1d(num_filters, 1, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
@@ -83,6 +86,11 @@ class WHChannelNet(nn.Module):
         self.a1 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[1], dtype=torch.double))
         self.a2 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[2], dtype=torch.double))
 
+        if seed is not None:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        
         nn.init.xavier_uniform_(self.conv1.weight)
         nn.init.xavier_uniform_(self.conv2.weight)
 
@@ -93,7 +101,7 @@ class WHChannelNet(nn.Module):
         return x
 
 class WHChannelNetComplex(nn.Module):
-    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0.0, 0.0, 0.0)):
+    def __init__(self, filter_length, num_filters, initial_non_linear_coefficients=(0.0, 0.0, 0.0), seed=None):
         super(WHChannelNetComplex, self).__init__()
         self.conv1 = nn.Conv1d(1, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
         self.conv2 = nn.Conv1d(num_filters, num_filters, filter_length, padding=filter_length // 2, bias=False, dtype=torch.double)
@@ -110,6 +118,11 @@ class WHChannelNetComplex(nn.Module):
         self.a0 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[0], dtype=torch.double))
         self.a1 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[1], dtype=torch.double))
         self.a2 = nn.Parameter(torch.tensor(initial_non_linear_coefficients[2], dtype=torch.double))
+
+        if seed is not None:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
 
         # Initialize the weights of the convolutional layers
         nn.init.xavier_uniform_(self.conv1.weight)
@@ -134,69 +147,43 @@ class WHChannelNetComplex(nn.Module):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def train_volterra_transmitter_model(train_symbols, receiver_rx, h, H, optimizer, scheduler, channel, num_epochs, batch_size):
+def train_volterra_model(train_symbols, receiver_rx, h, H, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
-        permutation = torch.randperm(train_size, device=device)
-        for i in range(0, train_size, batch_size):
+        permutation = torch.randperm(train_symbols.size(0))
+        for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i+batch_size]
-            batch_tx_symbols = train_symbols[indices].double()
-
+            batch_tx_symbols = train_symbols[indices].double().to(device)
             optimizer.zero_grad()
             rx, _ = forward_pass(batch_tx_symbols, channel, receiver_rx, h, H, receiver_rx.shape[0] // 2)
-
-            # Compute loss
             min_length = min(len(rx), len(batch_tx_symbols))
             rx = rx[:min_length]
             batch_tx_symbols = batch_tx_symbols[:min_length]
-
-            loss = F.mse_loss(rx, batch_tx_symbols)  # Mean squared error loss
+            loss = F.mse_loss(rx, batch_tx_symbols)
             loss.backward()
             optimizer.step()
-        scheduler.step()  # Update the learning rate
-        print(f"Volterra Transmitter - Epoch {epoch+1}, Loss: {loss.item()}")
+        print(f"Volterra - Epoch {epoch + 1}, Loss: {loss.item()}")
     return h, H
 
-def evaluate_volterra_transmitter_model(tx_symbols_input, receiver_rx, h, H, channel, padding):
+def evaluate_volterra_model(tx_symbols_input, receiver_rx, h, H, channel, padding):
     with torch.no_grad():
-        tx_symbols_eval = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double, device=device)
+        tx_symbols_eval = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double).to(device)
         tx_symbols_eval[0::SPS] = tx_symbols_input.double()
-
-        # Apply Volterra series on the transmitter side
         x = volterra(tx_symbols_eval, h, H)
-
-        # Simulate the channel
         y = channel.forward(x)
-
-        # Apply receiver with consistent padding
         rx_eval = F.conv1d(y.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=padding).squeeze()
-
         delay = estimate_delay(rx_eval, SPS)
         rx_eval = rx_eval[delay::SPS]
         rx_eval = rx_eval[:tx_symbols_input.numel()]
-
-        # Symbol estimation
         symbols_est = find_closest_symbol(rx_eval, torch.from_numpy(pam_symbols).to(device))
-
-        # Calculate errors and SER
         error = torch.sum(symbols_est != tx_symbols_input[:len(symbols_est)])
         SER = error.float() / len(symbols_est)
-        print(f"Volterra Transmitter - Evaluation SER: {SER.item()}")
-        # print(f"rx_eval: {rx_eval[:5].detach().cpu().numpy()}, tx: {tx_symbols_input[:5].detach().cpu().numpy()}")
+        print(f"Volterra - Evaluation SER: {SER.item()}")
         return SER
 
-def train_volterra_receiver_model(train_symbols, receiver_rx, h_rx, H_rx, optimizer, scheduler, channel, num_epochs, batch_size, pulse_tx):
-    if receiver_rx.ndim == 1:
-        receiver_rx_flipped = receiver_rx.flip(dims=[0])  # Pre-flip the receiver filter
-    else:
-        receiver_rx_flipped = receiver_rx.flip(dims=[-1])  # Pre-flip the receiver filter for higher dimensions
-
-    pulse_tx_padded = pulse_tx.shape[0] // 2
-
+def train_volterra_receiver_model(train_symbols, tx_pulse, h, H, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
-        permutation = torch.randperm(train_symbols.size(0), device=device)
-        total_loss = 0.0
-        num_batches = 0
-
+        permutation = torch.randperm(train_symbols.size(0))
+        total_loss = 0
         for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i + batch_size]
             batch_tx_symbols = train_symbols[indices].double().to(device)
@@ -206,21 +193,19 @@ def train_volterra_receiver_model(train_symbols, receiver_rx, h_rx, H_rx, optimi
             tx_symbols_up = torch.zeros((batch_tx_symbols.numel() * SPS,), dtype=torch.double).to(device)
             tx_symbols_up[0::SPS] = batch_tx_symbols
 
-            # Apply RRC filter to the transmitter
-            shaped_pulse = F.conv1d(tx_symbols_up.view(1, 1, -1), pulse_tx.view(1, 1, -1).flip(dims=[2]), padding=pulse_tx_padded).squeeze()
+            # Transmit through the fixed pulse shaping filter
+            shaped_pulse = F.conv1d(tx_symbols_up.view(1, 1, -1), tx_pulse.view(1, 1, -1), padding=tx_pulse.shape[0] // 2).squeeze()
 
             # Pass through the actual WH channel
             y = channel.forward(shaped_pulse)
 
-            # Apply Volterra series to the receiver
-            rx_volterra = volterra(y, h_rx, H_rx)
-
-            # Apply receiver filter with consistent padding
-            rx = F.conv1d(rx_volterra.view(1, 1, -1), receiver_rx_flipped.view(1, 1, -1), padding=receiver_rx.shape[0] // 2).squeeze()
+            # Forward pass through the Volterra receiver
+            rx = volterra(y, h, H)
 
             # Delay estimation and synchronization
             delay = estimate_delay(rx, SPS)
-            rx = rx[delay::SPS][:batch_tx_symbols.numel()]
+            rx = rx[delay::SPS]
+            rx = rx[:batch_tx_symbols.numel()]
 
             # Loss calculation and backpropagation
             loss = F.mse_loss(rx, batch_tx_symbols)
@@ -228,42 +213,31 @@ def train_volterra_receiver_model(train_symbols, receiver_rx, h_rx, H_rx, optimi
             optimizer.step()
 
             total_loss += loss.item()
-            num_batches += 1
 
-        scheduler.step()  # Update the learning rate
-        print(f"Volterra Receiver - Epoch {epoch + 1}, Average Loss: {total_loss / num_batches}")
+        print(f"Volterra Receiver - Epoch {epoch + 1}, Average Loss: {total_loss / (i // batch_size + 1)}")
+    return h, H
 
-    return h_rx, H_rx
-
-def evaluate_volterra_receiver_model(tx_symbols_input, receiver_rx, h_rx, H_rx, channel, pulse_tx, pam_symbols):
+def evaluate_volterra_receiver_model(tx_symbols_input, tx_pulse, h, H, channel, sps):
     with torch.no_grad():
-        # Upsample input symbols
-        tx_symbols_up = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double).to(device)
-        tx_symbols_up[0::SPS] = tx_symbols_input
+        # Prepare input signal
+        tx_symbols_up = torch.zeros((tx_symbols_input.numel() * sps,), dtype=torch.double).to(device)
+        tx_symbols_up[0::sps] = tx_symbols_input.double()
 
-        # Apply RRC filter to the transmitter
-        shaped_pulse = F.conv1d(tx_symbols_up.view(1, 1, -1), pulse_tx.view(1, 1, -1).flip(dims=[2]), padding=pulse_tx.shape[0] // 2).squeeze()
+        # Transmit through the fixed pulse shaping filter
+        shaped_pulse = F.conv1d(tx_symbols_up.view(1, 1, -1), tx_pulse.view(1, 1, -1), padding=tx_pulse.shape[0] // 2).squeeze()
 
         # Pass through the actual WH channel
         y = channel.forward(shaped_pulse)
 
-        # Apply Volterra series to the receiver
-        rx_volterra = volterra(y, h_rx, H_rx)
-
-        # Apply receiver filter with consistent padding
-        if receiver_rx.ndim == 1:
-            receiver_rx_flipped = receiver_rx.flip(dims=[0])  # Pre-flip the receiver filter
-        else:
-            receiver_rx_flipped = receiver_rx.flip(dims=[-1])  # Pre-flip the receiver filter for higher dimensions
-
-        rx_eval = F.conv1d(rx_volterra.view(1, 1, -1), receiver_rx_flipped.view(1, 1, -1), padding=receiver_rx.shape[0] // 2).squeeze()
+        # Forward pass through the Volterra receiver
+        rx_eval = volterra(y, h, H)
 
         # Delay estimation and synchronization
-        delay = estimate_delay(rx_eval, SPS)
-        rx_eval = rx_eval[delay::SPS][:tx_symbols_input.numel()]
+        delay = estimate_delay(rx_eval, sps)
+        symbols_est = rx_eval[delay::sps][:tx_symbols_input.numel()]
 
         # Symbol decision
-        symbols_est = find_closest_symbol(rx_eval, torch.from_numpy(pam_symbols).to(device))
+        symbols_est = find_closest_symbol(symbols_est, torch.from_numpy(pam_symbols).to(device))
 
         # Error calculation
         error = torch.sum(symbols_est != tx_symbols_input[:len(symbols_est)])
@@ -271,13 +245,10 @@ def evaluate_volterra_receiver_model(tx_symbols_input, receiver_rx, h_rx, H_rx, 
         print(f"Volterra Receiver - Evaluation SER: {SER.item()}")
         return SER
 
-
-
-def train_combined_volterra_model(train_symbols, receiver_rx, h_tx, H_tx, h_rx, H_rx, optimizer, scheduler, channel, num_epochs, batch_size):
+def train_combined_volterra_model(train_symbols, receiver_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size):
     for epoch in range(num_epochs):
         permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
-        num_batches = 0
         for i in range(0, train_symbols.size(0), batch_size):
             indices = permutation[i:i + batch_size]
             batch_tx_symbols = train_symbols[indices].double().to(device)
@@ -294,10 +265,7 @@ def train_combined_volterra_model(train_symbols, receiver_rx, h_tx, H_tx, h_rx, 
             y = channel.forward(shaped_pulse.squeeze())
 
             # Apply Volterra series to the receiver
-            rx_volterra = volterra(y, h_rx, H_rx)
-
-            # Apply receiver filter with consistent padding
-            rx = F.conv1d(rx_volterra.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=receiver_rx.shape[0] // 2).squeeze()
+            rx = volterra(y, h_rx, H_rx)
 
             # Delay estimation and synchronization
             delay = estimate_delay(rx, SPS)
@@ -305,18 +273,16 @@ def train_combined_volterra_model(train_symbols, receiver_rx, h_tx, H_tx, h_rx, 
             rx = rx[:batch_tx_symbols.numel()]
 
             # Loss calculation and backpropagation
-            loss = F.mse_loss(rx, batch_tx_symbols)
+            loss = torch.nn.functional.mse_loss(rx, batch_tx_symbols)
             loss.backward()
             optimizer.step()
 
             total_loss += loss.item()
-            num_batches += 1
 
-        scheduler.step()  # Update the learning rate
-        print(f"Combined Volterra - Epoch {epoch + 1}, Average Loss: {total_loss / num_batches}")
+        print(f"Combined Volterra - Epoch {epoch + 1}, Average Loss: {total_loss / (i // batch_size + 1)}")
     return h_tx, H_tx, h_rx, H_rx
 
-def evaluate_combined_volterra_model(tx_symbols_input, receiver_rx, h_tx, H_tx, h_rx, H_rx, channel):
+def evaluate_combined_volterra_model(tx_symbols_input, receiver_rx, h_tx, H_tx, h_rx, H_rx, channel, padding):
     with torch.no_grad():
         # Upsample input symbols
         tx_symbols_up = torch.zeros((tx_symbols_input.numel() * SPS,), dtype=torch.double).to(device)
@@ -329,10 +295,7 @@ def evaluate_combined_volterra_model(tx_symbols_input, receiver_rx, h_tx, H_tx, 
         y = channel.forward(shaped_pulse.squeeze())
 
         # Apply Volterra series to the receiver
-        rx_volterra = volterra(y, h_rx, H_rx)
-
-        # Apply receiver filter with consistent padding
-        rx_eval = F.conv1d(rx_volterra.view(1, 1, -1), receiver_rx.view(1, 1, -1).flip(dims=[2]), padding=receiver_rx.shape[0] // 2).squeeze()
+        rx_eval = volterra(y, h_rx, H_rx)
 
         # Delay estimation and synchronization
         delay = estimate_delay(rx_eval, SPS)
@@ -348,7 +311,7 @@ def evaluate_combined_volterra_model(tx_symbols_input, receiver_rx, h_tx, H_tx, 
         print(f"Combined Volterra - Evaluation SER: {SER.item()}")
         return SER
 
-def train_model(train_symbols, network, receiver_rx, optimizer, scheduler, channel, num_epochs, batch_size, sps):
+def train_model(train_symbols, network, receiver_rx, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
         permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
@@ -368,7 +331,6 @@ def train_model(train_symbols, network, receiver_rx, optimizer, scheduler, chann
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        scheduler.step()  # Update the learning rate
         print(f"Transmitter - Epoch {epoch + 1}, Average Loss: {total_loss / (i // batch_size + 1)}")
     return network
 
@@ -387,7 +349,7 @@ def evaluate_model(tx_symbols_input, network, receiver_rx, channel, sps):
         print(f"Transmitter - Evaluation SER: {SER.item()}")
         return SER
 
-def train_receiver_model(train_symbols, tx_pulse, network, optimizer, scheduler, channel, num_epochs, batch_size, sps):
+def train_receiver_model(train_symbols, tx_pulse, network, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
         permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
@@ -420,7 +382,7 @@ def train_receiver_model(train_symbols, tx_pulse, network, optimizer, scheduler,
             optimizer.step()
 
             total_loss += loss.item()
-        scheduler.step()  # Update the learning rate
+
         print(f"Receiver - Epoch {epoch + 1}, Average Loss: {total_loss / (i // batch_size + 1)}")
     return network
 
@@ -452,7 +414,7 @@ def evaluate_receiver_model(tx_symbols_input, tx_pulse, network, channel, sps):
         print(f"Receiver - Evaluation SER: {SER.item()}")
         return SER
 
-def train_combined_model(train_symbols, network_tx, network_rx, optimizer, scheduler, channel, num_epochs, batch_size, sps):
+def train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, sps):
     for epoch in range(num_epochs):
         permutation = torch.randperm(train_symbols.size(0))
         total_loss = 0
@@ -485,7 +447,7 @@ def train_combined_model(train_symbols, network_tx, network_rx, optimizer, sched
             optimizer.step()
 
             total_loss += loss.item()
-        scheduler.step()  # Update the learning rate
+
         print(f"Combined - Epoch {epoch + 1}, Average Loss: {total_loss / (i // batch_size + 1)}")
     return network_tx, network_rx
 
@@ -520,29 +482,35 @@ def evaluate_combined_model(tx_symbols_input, network_tx, network_rx, channel, s
 import random
 
 # Function to perform multiple runs and average results with timing
-def run_simulation():
+def run_simulation(SNR):
     num_epochs = 5
     batch_size = 512
-    num_runs = 1
-    SNR = 20
+    num_runs = 5
 
-    # # Ranges for different models
-    # h_H_sizes = range(4, 45, 4)
-    # h_H_sizes_combined = range(4, 33, 4)
-    # filter_length = 64
-    # num_filters_range = range(1, 17, 2)
-    # num_filters_range_complex = range(1, 6)
-    # num_filters_range_combined = range(1, 9)
-    # num_filters_range_complex_combined = range(1, 4)
+    # Filter length for the WH channel
+    filter_length_tx = 43  # Changed filter length for WHChannelNet Transmitter
+    filter_length_tx_complex = 40  # Changed filter length for WHChannelNetComplex Transmitter
+    filter_length_rx = 43  # Changed filter length for WHChannelNet Receiver
+    filter_length_rx_complex = 35  # Changed filter length for WHChannelNetComplex Receiver
+    filter_length_combined = 53  # Changed filter length for WHChannelNet Combined
+    filter_length_combined_complex = 13  # Changed filter length for WHChannelNetComplex Combined
 
-    h_H_sizes = range(4, 29, 4)
-    h_H_sizes_combined = range(4, 17, 4)
-    filter_length = 64
-    filter_length_HC = 13
-    num_filters_range = range(1, 5, 2)
-    num_filters_range_complex = range(1, 3)
-    num_filters_range_combined = range(1, 4)
-    num_filters_range_complex_combined = range(1, 3)
+    # Ranges for hyperparameters
+    h_H_sizes = range(4, 45, 4)
+    h_H_sizes_combined = range(4, 33, 4)
+    num_filters_range = range(1, 24, 2)
+    num_filters_range_complex_tx = range(1, 7)
+    num_filters_range_complex_rx = range(1, 8)
+    num_filters_range_combined = range(1, 10)
+    num_filters_range_complex_combined = range(1, 9)
+
+    # h_H_sizes = range(4, 17, 4)
+    # h_H_sizes_combined = range(4, 9, 4)
+    # num_filters_range = range(1, 5, 2)
+    # num_filters_range_complex_tx = range(1, 3)
+    # num_filters_range_complex_rx = range(1, 3)
+    # num_filters_range_combined = range(1, 4)
+    # num_filters_range_complex_combined = range(1, 3)
 
     ser_results_volterra = []
     ser_results_volterra_rx = []
@@ -553,7 +521,6 @@ def run_simulation():
     ser_results_rx_complex = []
     ser_results_combined = []
     ser_results_combined_complex = []
-    ser_results_combined_complex_HC = []
 
     def set_seed(run):
         random.seed(run)
@@ -562,25 +529,24 @@ def run_simulation():
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(run)
 
-    # # Volterra Transmitter model
-    # for size in h_H_sizes:
-    #     ser_avg = 0.0
-    #     for run in range(num_runs):
-    #         set_seed(run)
-    #         print(f"Volterra Transmitter - h_size: {size}, H_size: {size}, Run: {run + 1}")
-    #         h = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
-    #         H = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
-    #         optimizer = torch.optim.Adam([h, H], lr=0.001)
-    #         scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    #         channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-    #         h, H = train_volterra_transmitter_model(train_symbols, pulse_rx, h, H, optimizer, scheduler, channel, num_epochs, batch_size)
+    # Volterra model
+    for size in h_H_sizes:
+        ser_avg = 0.0
+        for run in range(num_runs):
+            set_seed(run)
+            print(f"Volterra - h_size: {size}, H_size: {size}, Run: {run + 1}")
+            h = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
+            H = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
+            optimizer = torch.optim.Adam([h, H], lr=0.001)
+            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+            h, H = train_volterra_model(train_symbols, pulse_rx, h, H, optimizer, channel, num_epochs, batch_size)
             
-    #         SER = evaluate_volterra_transmitter_model(test_symbols, pulse_rx, h, H, channel, pulse_rx.shape[0] // 2)
-    #         ser_avg += SER.item()
+            SER = evaluate_volterra_model(test_symbols, pulse_rx, h, H, channel, pulse_rx.shape[0] // 2)
+            ser_avg += SER.item()
         
-    #     ser_avg /= num_runs
-    #     num_parameters = h.numel() + H.numel()
-    #     ser_results_volterra.append((num_parameters, ser_avg))
+        ser_avg /= num_runs
+        num_parameters = h.numel() + H.numel()
+        ser_results_volterra.append((num_parameters, ser_avg))
 
     # Volterra Receiver model
     for size in h_H_sizes:
@@ -588,18 +554,17 @@ def run_simulation():
         for run in range(num_runs):
             set_seed(run)
             print(f"Volterra Receiver - h_size: {size}, H_size: {size}, Run: {run + 1}")
-            h_rx = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
-            H_rx = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
-            optimizer = torch.optim.Adam([h_rx, H_rx], lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+            h = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
+            H = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
+            optimizer = torch.optim.Adam([h, H], lr=0.001)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            h_rx, H_rx = train_volterra_receiver_model(train_symbols, pulse_rx, h_rx, H_rx, optimizer, scheduler, channel, num_epochs, batch_size, pulse_tx)
+            h, H = train_volterra_receiver_model(train_symbols, pulse_tx, h, H, optimizer, channel, num_epochs, batch_size)
 
-            SER = evaluate_volterra_receiver_model(test_symbols, pulse_rx, h_rx, H_rx, channel, pulse_tx, pam_symbols)
+            SER = evaluate_volterra_receiver_model(test_symbols, pulse_tx, h, H, channel, SPS)
             ser_avg += SER.item()
 
         ser_avg /= num_runs
-        num_parameters = h_rx.numel() + H_rx.numel()
+        num_parameters = h.numel() + H.numel()
         ser_results_volterra_rx.append((num_parameters, ser_avg))
 
     # Combined Volterra model
@@ -613,28 +578,26 @@ def run_simulation():
             h_rx = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
             H_rx = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
             optimizer = torch.optim.Adam([h_tx, H_tx, h_rx, H_rx], lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            h_tx, H_tx, h_rx, H_rx = train_combined_volterra_model(train_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, optimizer, scheduler, channel, num_epochs, batch_size)
+            h_tx, H_tx, h_rx, H_rx = train_combined_volterra_model(train_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size)
 
-            SER = evaluate_combined_volterra_model(test_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, channel)
+            SER = evaluate_combined_volterra_model(test_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, channel, pulse_rx.shape[0] // 2)
             ser_avg += SER.item()
 
         ser_avg /= num_runs
         num_parameters = h_tx.numel() + H_tx.numel() + h_rx.numel() + H_rx.numel()
         ser_results_volterra_combined.append((num_parameters, ser_avg))
 
-    # Transmitter optimization model
+    # Transmitter optimization model with changed filter length
     for num_filters in num_filters_range:
         ser_avg = 0.0
         for run in range(num_runs):
             set_seed(run)
-            print(f"Transmitter - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNet(filter_length, num_filters).to(device)
+            print(f"Transmitter - filter_length: {filter_length_tx}, num_filters: {num_filters}, Run: {run + 1}")
+            network = WHChannelNet(filter_length_tx, num_filters).to(device)
             optimizer = optim.Adam(network.parameters(), lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_model(train_symbols, network, pulse_rx, optimizer, scheduler, channel, num_epochs, batch_size, SPS)
+            trained_network = train_model(train_symbols, network, pulse_rx, optimizer, channel, num_epochs, batch_size, SPS)
             
             SER = evaluate_model(test_symbols, trained_network, pulse_rx, channel, SPS)
             ser_avg += SER.item()
@@ -643,17 +606,16 @@ def run_simulation():
         num_parameters = count_parameters(trained_network)
         ser_results_tx.append((num_parameters, ser_avg))
 
-    # Transmitter optimization model with WHChannelComplex
-    for num_filters in num_filters_range_complex:
+    # Transmitter optimization model with WHChannelComplex and changed filter length
+    for num_filters in num_filters_range_complex_tx:
         ser_avg = 0.0
         for run in range(num_runs):
             set_seed(run)
-            print(f"Transmitter (WHChannelComplex) - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNetComplex(filter_length, num_filters).to(device)
+            print(f"Transmitter (WHChannelComplex) - filter_length: {filter_length_tx_complex}, num_filters: {num_filters}, Run: {run + 1}")
+            network = WHChannelNetComplex(filter_length_tx_complex, num_filters).to(device)
             optimizer = optim.Adam(network.parameters(), lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_model(train_symbols, network, pulse_rx, optimizer, scheduler, channel, num_epochs, batch_size, SPS)
+            trained_network = train_model(train_symbols, network, pulse_rx, optimizer, channel, num_epochs, batch_size, SPS)
             
             SER = evaluate_model(test_symbols, trained_network, pulse_rx, channel, SPS)
             ser_avg += SER.item()
@@ -662,17 +624,16 @@ def run_simulation():
         num_parameters = count_parameters(trained_network)
         ser_results_tx_complex.append((num_parameters, ser_avg))
 
-    # Receiver optimization model
+    # Receiver optimization model with changed filter length
     for num_filters in num_filters_range:
         ser_avg = 0.0
         for run in range(num_runs):
             set_seed(run)
-            print(f"Receiver - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNet(filter_length, num_filters).to(device)
+            print(f"Receiver - filter_length: {filter_length_rx}, num_filters: {num_filters}, Run: {run + 1}")
+            network = WHChannelNet(filter_length_rx, num_filters).to(device)
             optimizer = optim.Adam(network.parameters(), lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, scheduler, channel, num_epochs, batch_size, SPS)
+            trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, channel, num_epochs, batch_size, SPS)
             
             SER = evaluate_receiver_model(test_symbols, pulse_tx, trained_network, channel, SPS)
             ser_avg += SER.item()
@@ -681,17 +642,16 @@ def run_simulation():
         num_parameters = count_parameters(trained_network)
         ser_results_rx.append((num_parameters, ser_avg))
 
-    # Receiver optimization model with WHChannelComplex
-    for num_filters in num_filters_range_complex:
+    # Receiver optimization model with WHChannelComplex and changed filter length
+    for num_filters in num_filters_range_complex_rx:
         ser_avg = 0.0
         for run in range(num_runs):
             set_seed(run)
-            print(f"Receiver (WHChannelComplex) - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNetComplex(filter_length, num_filters).to(device)
+            print(f"Receiver (WHChannelComplex) - filter_length: {filter_length_rx_complex}, num_filters: {num_filters}, Run: {run + 1}")
+            network = WHChannelNetComplex(filter_length_rx_complex, num_filters).to(device)
             optimizer = optim.Adam(network.parameters(), lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, scheduler, channel, num_epochs, batch_size, SPS)
+            trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, channel, num_epochs, batch_size, SPS)
             
             SER = evaluate_receiver_model(test_symbols, pulse_tx, trained_network, channel, SPS)
             ser_avg += SER.item()
@@ -700,18 +660,17 @@ def run_simulation():
         num_parameters = count_parameters(trained_network)
         ser_results_rx_complex.append((num_parameters, ser_avg))
 
-    # Combined optimization model
+    # Combined optimization model with changed filter length
     for num_filters in num_filters_range_combined:
         ser_avg = 0.0
         for run in range(num_runs):
             set_seed(run)
-            print(f"Combined - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
-            network_tx = WHChannelNet(filter_length, num_filters).to(device)
-            network_rx = WHChannelNet(filter_length, num_filters).to(device)
+            print(f"Combined - filter_length: {filter_length_combined}, num_filters: {num_filters}, Run: {run + 1}")
+            network_tx = WHChannelNet(filter_length_combined, num_filters).to(device)
+            network_rx = WHChannelNet(filter_length_combined, num_filters).to(device)
             optimizer = optim.Adam(list(network_tx.parameters()) + list(network_rx.parameters()), lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, scheduler, channel, num_epochs, batch_size, SPS)
+            trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, SPS)
             
             SER = evaluate_combined_model(test_symbols, trained_network_tx, trained_network_rx, channel, SPS)
             ser_avg += SER.item()
@@ -720,18 +679,17 @@ def run_simulation():
         num_parameters = count_parameters(trained_network_tx) + count_parameters(trained_network_rx)
         ser_results_combined.append((num_parameters, ser_avg))
 
-    # Combined optimization model with WHChannelComplex
+    # Combined optimization model with WHChannelComplex and changed filter length
     for num_filters in num_filters_range_complex_combined:
         ser_avg = 0.0
         for run in range(num_runs):
             set_seed(run)
-            print(f"Combined (WHChannelComplex) - filter_length: {filter_length}, num_filters: {num_filters}, Run: {run + 1}")
-            network_tx = WHChannelNetComplex(filter_length, num_filters).to(device)
-            network_rx = WHChannelNetComplex(filter_length, num_filters).to(device)
+            print(f"Combined (WHChannelComplex) - filter_length: {filter_length_combined_complex}, num_filters: {num_filters}, Run: {run + 1}")
+            network_tx = WHChannelNetComplex(filter_length_combined_complex, num_filters).to(device)
+            network_rx = WHChannelNetComplex(filter_length_combined_complex, num_filters).to(device)
             optimizer = optim.Adam(list(network_tx.parameters()) + list(network_rx.parameters()), lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
             channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, scheduler, channel, num_epochs, batch_size, SPS)
+            trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, SPS)
             
             SER = evaluate_combined_model(test_symbols, trained_network_tx, trained_network_rx, channel, SPS)
             ser_avg += SER.item()
@@ -740,51 +698,40 @@ def run_simulation():
         num_parameters = count_parameters(trained_network_tx) + count_parameters(trained_network_rx)
         ser_results_combined_complex.append((num_parameters, ser_avg))
 
-    # Combined optimization model with WHChannelComplex (HC)
-    for num_filters in num_filters_range_complex_combined:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Combined (WHChannelComplex) (HC) - filter_length: {filter_length_HC}, num_filters: {num_filters}, Run: {run + 1}")
-            network_tx = WHChannelNetComplex(filter_length_HC, num_filters).to(device)
-            network_rx = WHChannelNetComplex(filter_length_HC, num_filters).to(device)
-            optimizer = optim.Adam(list(network_tx.parameters()) + list(network_rx.parameters()), lr=0.001)
-            scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, scheduler, channel, num_epochs, batch_size, SPS)
-            
-            SER = evaluate_combined_model(test_symbols, trained_network_tx, trained_network_rx, channel, SPS)
-            ser_avg += SER.item()
-        
-        ser_avg /= num_runs
-        num_parameters = count_parameters(trained_network_tx) + count_parameters(trained_network_rx)
-        ser_results_combined_complex_HC.append((num_parameters, ser_avg))
+    return (ser_results_volterra, ser_results_volterra_rx, ser_results_volterra_combined,
+            ser_results_tx, ser_results_tx_complex, ser_results_rx, ser_results_rx_complex,
+            ser_results_combined, ser_results_combined_complex)
 
-    # Plotting results
+def plot_results(results, SNR):
 
+    # SER vs Number of Parameters
     plt.figure(figsize=(12, 8))
 
-    def plot_results(results, label, marker, linestyle, color):
+    def plot_individual_results(results, label, marker, linestyle, color):
         num_params, ser = zip(*results)
         plt.plot(num_params, ser, marker=marker, linestyle=linestyle, color=color, label=label)
 
+    # Unpack results
+    (ser_results_volterra, ser_results_volterra_rx, ser_results_volterra_combined,
+     ser_results_tx, ser_results_tx_complex, ser_results_rx, ser_results_rx_complex,
+     ser_results_combined, ser_results_combined_complex) = results
+
     # Volterra
-    plot_results(ser_results_volterra, "Volterra Transmitter", 'o', '-', '#1f77b4')  # muted blue
-    plot_results(ser_results_volterra_rx, "Volterra Receiver", 'd', '--', '#1f99d4')  # slightly lighter blue
-    plot_results(ser_results_volterra_combined, "Volterra Combined", 's', '-.', '#1f55b4')  # slightly darker blue
+    plot_individual_results(ser_results_volterra, "Volterra Transmitter", 'o', '-', '#1f77b4')  # muted blue
+    plot_individual_results(ser_results_volterra_rx, "Volterra Receiver", 'd', '--', '#1f99d4')  # slightly lighter blue
+    plot_individual_results(ser_results_volterra_combined, "Volterra Combined", 's', '-.', '#1f55b4')  # slightly darker blue
 
     # Transmitter
-    plot_results(ser_results_tx, "NN Transmitter", 'o', '-', '#F06000')  # muted orange
-    plot_results(ser_results_tx_complex, "NN Transmitter (Complex)", 'o', '-', '#FF8F00')  # light orange
+    plot_individual_results(ser_results_tx, "NN Transmitter", 'o', '-', '#F06000')  # muted orange
+    plot_individual_results(ser_results_tx_complex, "NN Transmitter (Complex)", 'o', '-', '#FF8F00')  # light orange
 
     # Receiver
-    plot_results(ser_results_rx, "NN Receiver", 'd', '--', '#F29F05')  # muted red
-    plot_results(ser_results_rx_complex, "NN Receiver (Complex)", 'd', '--', '#FDD430')  # slightly darker red
+    plot_individual_results(ser_results_rx, "NN Receiver", 'd', '--', '#F29F05')  # muted red
+    plot_individual_results(ser_results_rx_complex, "NN Receiver (Complex)", 'd', '--', '#FDD430')  # slightly darker red
 
     # Combined
-    plot_results(ser_results_combined, "NN Combined", 's', '-.', 'green')  # muted green
-    plot_results(ser_results_combined_complex, "NN Combined (Complex)", 's', '-.', '#B4CF66')  # slightly lighter green
-    plot_results(ser_results_combined_complex_HC, "NN Combined (Complex) HC", 's', '-.', '#1f77b4')  # slightly lighter green
+    plot_individual_results(ser_results_combined, "NN Combined", 's', '-.', 'green')  # muted green
+    plot_individual_results(ser_results_combined_complex, "NN Combined (Complex)", 's', '-.', '#B4CF66')  # slightly lighter green
 
     plt.xlabel("Number of Parameters")
     plt.ylabel("Symbol Error Rate (SER)")
@@ -794,5 +741,14 @@ def run_simulation():
     plt.grid(True)
     plt.show()
 
-# Run the simulation
-run_simulation()
+# Store results for different SNR values
+results_5 = run_simulation(5)
+results_10 = run_simulation(10)
+results_15 = run_simulation(15)
+results_20 = run_simulation(20)
+
+# Plot results for different SNR values
+plot_results(results_5, 5)
+plot_results(results_10, 10)
+plot_results(results_15, 15)
+plot_results(results_20, 20)

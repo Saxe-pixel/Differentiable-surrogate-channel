@@ -13,7 +13,6 @@ from lib.channels import WienerHammersteinISIChannel
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Simulation parameters
-SEED = 12345
 N_SYMBOLS = int(5 * 1e5)
 SPS = 8  # Samples-per-symbol (oversampling rate)
 BAUD_RATE = 10e6  # Number of symbols transmitted per second

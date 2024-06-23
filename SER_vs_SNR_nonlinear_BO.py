@@ -13,7 +13,6 @@ from lib.channels import WienerHammersteinISIChannel
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Simulation parameters
-SEED = 12345
 N_SYMBOLS = int(5 * 1e5)
 SPS = 8  # Samples-per-symbol (oversampling rate)
 BAUD_RATE = 10e6  # Number of symbols transmitted per second
@@ -482,273 +481,152 @@ def evaluate_combined_model(tx_symbols_input, network_tx, network_rx, channel, s
 
 import random
 
-# Function to perform multiple runs and average results with timing
-def run_simulation(SNR):
-    num_epochs = 5
-    batch_size = 512
-    num_runs = 5
+# Training and evaluation settings
+num_epochs = 5
+batch_size = 512
+num_runs = 5
+SNRs = range(0, 21, 2)
 
-    # # Ranges for different models
-    filter_length_tx = 43  # Changed filter length for WHChannelNet Transmitter
-    filter_length_tx_complex = 40  # Changed filter length for WHChannelNetComplex Transmitter
-    filter_length_rx = 43  # Changed filter length for WHChannelNet Receiver
-    filter_length_rx_complex = 35  # Changed filter length for WHChannelNetComplex Receiver
-    filter_length_combined = 53  # Changed filter length for WHChannelNet Combined
-    filter_length_combined_complex = 13  # Changed filter length for WHChannelNetComplex Combined
+# Placeholder for SER results
+ser_results = {
+    "Volterra Transmitter": [],
+    "Volterra Receiver": [],
+    "Volterra Combined": [],
+    "NN Transmitter": [],
+    "NN Transmitter (Complex)": [],
+    "NN Receiver": [],
+    "NN Receiver (Complex)": [],
+    "NN Combined": [],
+    "NN Combined (Complex)": []
+}
 
-    h_H_sizes = range(4, 45, 4)
-    h_H_sizes_combined = range(4, 33, 4)
-    num_filters_range = range(1, 24, 2)
-    num_filters_range_complex_tx = range(1, 7)
-    num_filters_range_complex_rx = range(1, 8)
-    num_filters_range_combined = range(1, 10)
-    num_filters_range_complex_combined = range(1, 9)
+# Function to set seed for reproducibility
+def set_seed(run):
+    random.seed(run)
+    np.random.seed(run)
+    torch.manual_seed(run)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(run)
 
-    # h_H_sizes = range(4, 17, 4)
-    # h_H_sizes_combined = range(4, 9, 4)
-    # num_filters_range = range(1, 5, 2)
-    # num_filters_range_complex_tx = range(1, 3)
-    # num_filters_range_complex_rx = range(1, 3)
-    # num_filters_range_combined = range(1, 4)
-    # num_filters_range_complex_combined = range(1, 3)
+filter_length_tx = 43  # Changed filter length for WHChannelNet Transmitter
+filter_length_tx_complex = 40  # Changed filter length for WHChannelNetComplex Transmitter
+filter_length_rx = 43  # Changed filter length for WHChannelNet Receiver
+filter_length_rx_complex = 35  # Changed filter length for WHChannelNetComplex Receiver
+filter_length_combined = 53  # Changed filter length for WHChannelNet Combined
+filter_length_combined_complex = 13  # Changed filter length for WHChannelNetComplex Combined
 
-    ser_results_volterra = []
-    ser_results_volterra_rx = []
-    ser_results_volterra_combined = []
-    ser_results_tx = []
-    ser_results_tx_complex = []
-    ser_results_rx = []
-    ser_results_rx_complex = []
-    ser_results_combined = []
-    ser_results_combined_complex = []
+# Ranges for different models
+h_H_sizes = 44
+h_H_sizes_combined = 32
+num_filters_range = 23
+num_filters_range_complex_tx = 6
+num_filters_range_complex_rx = 7
+num_filters_range_combined = 9
+num_filters_range_complex_combined = 8
 
-    def set_seed(run):
-        random.seed(run)
-        np.random.seed(run)
-        torch.manual_seed(run)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(run)
-
-    # Volterra model
-    for size in h_H_sizes:
+# Train and evaluate models
+for snr_db in SNRs:
+    print(f"Training and evaluating models for SNR: {snr_db} dB")
+    for model_name in ser_results.keys():
         ser_avg = 0.0
         for run in range(num_runs):
             set_seed(run)
-            print(f"Volterra - h_size: {size}, H_size: {size}, Run: {run + 1}")
-            h = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
-            H = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
-            optimizer = torch.optim.Adam([h, H], lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            h, H = train_volterra_model(train_symbols, pulse_rx, h, H, optimizer, channel, num_epochs, batch_size)
-            
-            SER = evaluate_volterra_model(test_symbols, pulse_rx, h, H, channel, pulse_rx.shape[0] // 2)
+            print(f"Run: {run + 1} for model {model_name}")
+            if model_name == "Volterra Transmitter":
+                h = nn.Parameter(torch.zeros(h_H_sizes, dtype=torch.double, device=device) * 0.01)
+                H = nn.Parameter(torch.zeros(h_H_sizes, h_H_sizes, dtype=torch.double, device=device) * 0.01)
+                optimizer = optim.Adam([h, H], lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                h, H = train_volterra_model(train_symbols, pulse_rx, h, H, optimizer, channel, num_epochs, batch_size)
+                SER = evaluate_volterra_model(test_symbols, pulse_rx, h, H, channel, pulse_rx.shape[0] // 2)
+            elif model_name == "Volterra Receiver":
+                h = nn.Parameter(torch.zeros(h_H_sizes, dtype=torch.double, device=device) * 0.01)
+                H = nn.Parameter(torch.zeros(h_H_sizes, h_H_sizes, dtype=torch.double, device=device) * 0.01)
+                optimizer = optim.Adam([h, H], lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                h, H = train_volterra_receiver_model(train_symbols, pulse_tx, h, H, optimizer, channel, num_epochs, batch_size)
+                SER = evaluate_volterra_receiver_model(test_symbols, pulse_tx, h, H, channel, SPS)
+            elif model_name == "Volterra Combined":
+                h_tx = nn.Parameter(torch.zeros(h_H_sizes_combined, dtype=torch.double, device=device) * 0.01)
+                H_tx = nn.Parameter(torch.zeros(h_H_sizes_combined, h_H_sizes_combined, dtype=torch.double, device=device) * 0.01)
+                h_rx = nn.Parameter(torch.zeros(h_H_sizes_combined, dtype=torch.double, device=device) * 0.01)
+                H_rx = nn.Parameter(torch.zeros(h_H_sizes_combined, h_H_sizes_combined, dtype=torch.double, device=device) * 0.01)
+                optimizer = optim.Adam([h_tx, H_tx, h_rx, H_rx], lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                h_tx, H_tx, h_rx, H_rx = train_combined_volterra_model(train_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size)
+                SER = evaluate_combined_volterra_model(test_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, channel, pulse_rx.shape[0] // 2)
+            elif model_name == "NN Transmitter":
+                network = WHChannelNet(filter_length_tx, num_filters_range).to(device)
+                optimizer = optim.Adam(network.parameters(), lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                trained_network = train_model(train_symbols, network, pulse_rx, optimizer, channel, num_epochs, batch_size, SPS)
+                SER = evaluate_model(test_symbols, trained_network, pulse_rx, channel, SPS)
+            elif model_name == "NN Transmitter (Complex)":
+                network = WHChannelNetComplex(filter_length_tx_complex, num_filters_range_complex_tx).to(device)
+                optimizer = optim.Adam(network.parameters(), lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                trained_network = train_model(train_symbols, network, pulse_rx, optimizer, channel, num_epochs, batch_size, SPS)
+                SER = evaluate_model(test_symbols, trained_network, pulse_rx, channel, SPS)
+            elif model_name == "NN Receiver":
+                network = WHChannelNet(filter_length_rx, num_filters_range).to(device)
+                optimizer = optim.Adam(network.parameters(), lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, channel, num_epochs, batch_size, SPS)
+                SER = evaluate_receiver_model(test_symbols, pulse_tx, trained_network, channel, SPS)
+            elif model_name == "NN Receiver (Complex)":
+                network = WHChannelNetComplex(filter_length_rx_complex, num_filters_range_complex_rx).to(device)
+                optimizer = optim.Adam(network.parameters(), lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, channel, num_epochs, batch_size, SPS)
+                SER = evaluate_receiver_model(test_symbols, pulse_tx, trained_network, channel, SPS)
+            elif model_name == "NN Combined":
+                network_tx = WHChannelNet(filter_length_combined, num_filters_range_combined).to(device)
+                network_rx = WHChannelNet(filter_length_combined, num_filters_range_combined).to(device)
+                optimizer = optim.Adam(list(network_tx.parameters()) + list(network_rx.parameters()), lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, SPS)
+                SER = evaluate_combined_model(test_symbols, trained_network_tx, trained_network_rx, channel, SPS)
+            elif model_name == "NN Combined (Complex)":
+                network_tx = WHChannelNetComplex(filter_length_combined_complex, num_filters_range_complex_combined).to(device)
+                network_rx = WHChannelNetComplex(filter_length_combined_complex, num_filters_range_complex_combined).to(device)
+                optimizer = optim.Adam(list(network_tx.parameters()) + list(network_rx.parameters()), lr=0.001)
+                channel = WienerHammersteinISIChannel(snr_db=snr_db, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
+                trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, SPS)
+                SER = evaluate_combined_model(test_symbols, trained_network_tx, trained_network_rx, channel, SPS)
             ser_avg += SER.item()
-        
         ser_avg /= num_runs
-        num_parameters = h.numel() + H.numel()
-        ser_results_volterra.append((num_parameters, ser_avg))
+        ser_results[model_name].append(ser_avg)
 
-    # Volterra Receiver model
-    for size in h_H_sizes:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Volterra Receiver - h_size: {size}, H_size: {size}, Run: {run + 1}")
-            h = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
-            H = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
-            optimizer = torch.optim.Adam([h, H], lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            h, H = train_volterra_receiver_model(train_symbols, pulse_tx, h, H, optimizer, channel, num_epochs, batch_size)
+import matplotlib.pyplot as plt
 
-            SER = evaluate_volterra_receiver_model(test_symbols, pulse_tx, h, H, channel, SPS)
-            ser_avg += SER.item()
+def plot_results(ser_results, label, marker, linestyle, color):
+    plt.plot(SNRs, ser_results, label=label, marker=marker, linestyle=linestyle, color=color)
 
-        ser_avg /= num_runs
-        num_parameters = h.numel() + H.numel()
-        ser_results_volterra_rx.append((num_parameters, ser_avg))
+# Assuming ser_results dictionary contains your results for each model
+# Example of how to call plot_results for each model with the specified color codes
 
-    # Combined Volterra model
-    for size in h_H_sizes_combined:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Combined Volterra - h_tx_size: {size}, H_tx_size: {size}, h_rx_size: {size}, H_rx_size: {size}, Run: {run + 1}")
-            h_tx = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
-            H_tx = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
-            h_rx = nn.Parameter(torch.zeros(size, dtype=torch.double, device=device) * 0.01)
-            H_rx = nn.Parameter(torch.zeros(size, size, dtype=torch.double, device=device) * 0.01)
-            optimizer = torch.optim.Adam([h_tx, H_tx, h_rx, H_rx], lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            h_tx, H_tx, h_rx, H_rx = train_combined_volterra_model(train_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, optimizer, channel, num_epochs, batch_size)
+# Volterra
+plot_results(ser_results["Volterra Transmitter"], "Volterra Transmitter", 'o', '-', '#1f77b4')  # muted blue
+plot_results(ser_results["Volterra Receiver"], "Volterra Receiver", 'd', '--', '#1f99d4')  # slightly lighter blue
+plot_results(ser_results["Volterra Combined"], "Volterra Combined", 's', '-.', '#1f55b4')  # slightly darker blue
 
-            SER = evaluate_combined_volterra_model(test_symbols, pulse_rx, h_tx, H_tx, h_rx, H_rx, channel, pulse_rx.shape[0] // 2)
-            ser_avg += SER.item()
+# Transmitter
+plot_results(ser_results["NN Transmitter"], "NN Transmitter", 'o', '-', '#F06000')  # muted orange
+plot_results(ser_results["NN Transmitter (Complex)"], "NN Transmitter (Complex)", 'o', '-', '#FF8F00')  # light orange
 
-        ser_avg /= num_runs
-        num_parameters = h_tx.numel() + H_tx.numel() + h_rx.numel() + H_rx.numel()
-        ser_results_volterra_combined.append((num_parameters, ser_avg))
+# Receiver
+plot_results(ser_results["NN Receiver"], "NN Receiver", 'd', '--', '#F29F05')  # muted red
+plot_results(ser_results["NN Receiver (Complex)"], "NN Receiver (Complex)", 'd', '--', '#FDD430')  # slightly darker red
 
-    # Transmitter optimization model with changed filter length
-    for num_filters in num_filters_range:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Transmitter - filter_length: {filter_length_tx}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNet(filter_length_tx, num_filters).to(device)
-            optimizer = optim.Adam(network.parameters(), lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_model(train_symbols, network, pulse_rx, optimizer, channel, num_epochs, batch_size, SPS)
-            
-            SER = evaluate_model(test_symbols, trained_network, pulse_rx, channel, SPS)
-            ser_avg += SER.item()
-        
-        ser_avg /= num_runs
-        num_parameters = count_parameters(trained_network)
-        ser_results_tx.append((num_parameters, ser_avg))
+# Combined
+plot_results(ser_results["NN Combined"], "NN Combined", 's', '-.', 'green')  # muted green
+plot_results(ser_results["NN Combined (Complex)"], "NN Combined (Complex)", 's', '-.', '#B4CF66')  # slightly lighter green
 
-    # Transmitter optimization model with WHChannelComplex and changed filter length
-    for num_filters in num_filters_range_complex_tx:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Transmitter (WHChannelComplex) - filter_length: {filter_length_tx_complex}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNetComplex(filter_length_tx_complex, num_filters).to(device)
-            optimizer = optim.Adam(network.parameters(), lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_model(train_symbols, network, pulse_rx, optimizer, channel, num_epochs, batch_size, SPS)
-            
-            SER = evaluate_model(test_symbols, trained_network, pulse_rx, channel, SPS)
-            ser_avg += SER.item()
-        
-        ser_avg /= num_runs
-        num_parameters = count_parameters(trained_network)
-        ser_results_tx_complex.append((num_parameters, ser_avg))
-
-    # Receiver optimization model with changed filter length
-    for num_filters in num_filters_range:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Receiver - filter_length: {filter_length_rx}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNet(filter_length_rx, num_filters).to(device)
-            optimizer = optim.Adam(network.parameters(), lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, channel, num_epochs, batch_size, SPS)
-            
-            SER = evaluate_receiver_model(test_symbols, pulse_tx, trained_network, channel, SPS)
-            ser_avg += SER.item()
-        
-        ser_avg /= num_runs
-        num_parameters = count_parameters(trained_network)
-        ser_results_rx.append((num_parameters, ser_avg))
-
-    # Receiver optimization model with WHChannelComplex and changed filter length
-    for num_filters in num_filters_range_complex_rx:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Receiver (WHChannelComplex) - filter_length: {filter_length_rx_complex}, num_filters: {num_filters}, Run: {run + 1}")
-            network = WHChannelNetComplex(filter_length_rx_complex, num_filters).to(device)
-            optimizer = optim.Adam(network.parameters(), lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network = train_receiver_model(train_symbols, pulse_tx, network, optimizer, channel, num_epochs, batch_size, SPS)
-            
-            SER = evaluate_receiver_model(test_symbols, pulse_tx, trained_network, channel, SPS)
-            ser_avg += SER.item()
-        
-        ser_avg /= num_runs
-        num_parameters = count_parameters(trained_network)
-        ser_results_rx_complex.append((num_parameters, ser_avg))
-
-    # Combined optimization model with changed filter length
-    for num_filters in num_filters_range_combined:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Combined - filter_length: {filter_length_combined}, num_filters: {num_filters}, Run: {run + 1}")
-            network_tx = WHChannelNet(filter_length_combined, num_filters).to(device)
-            network_rx = WHChannelNet(filter_length_combined, num_filters).to(device)
-            optimizer = optim.Adam(list(network_tx.parameters()) + list(network_rx.parameters()), lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, SPS)
-            
-            SER = evaluate_combined_model(test_symbols, trained_network_tx, trained_network_rx, channel, SPS)
-            ser_avg += SER.item()
-        
-        ser_avg /= num_runs
-        num_parameters = count_parameters(trained_network_tx) + count_parameters(trained_network_rx)
-        ser_results_combined.append((num_parameters, ser_avg))
-
-    # Combined optimization model with WHChannelComplex and changed filter length
-    for num_filters in num_filters_range_complex_combined:
-        ser_avg = 0.0
-        for run in range(num_runs):
-            set_seed(run)
-            print(f"Combined (WHChannelComplex) - filter_length: {filter_length_combined_complex}, num_filters: {num_filters}, Run: {run + 1}")
-            network_tx = WHChannelNetComplex(filter_length_combined_complex, num_filters).to(device)
-            network_rx = WHChannelNetComplex(filter_length_combined_complex, num_filters).to(device)
-            optimizer = optim.Adam(list(network_tx.parameters()) + list(network_rx.parameters()), lr=0.001)
-            channel = WienerHammersteinISIChannel(snr_db=SNR, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
-            trained_network_tx, trained_network_rx = train_combined_model(train_symbols, network_tx, network_rx, optimizer, channel, num_epochs, batch_size, SPS)
-            
-            SER = evaluate_combined_model(test_symbols, trained_network_tx, trained_network_rx, channel, SPS)
-            ser_avg += SER.item()
-        
-        ser_avg /= num_runs
-        num_parameters = count_parameters(trained_network_tx) + count_parameters(trained_network_rx)
-        ser_results_combined_complex.append((num_parameters, ser_avg))
-
-    return (ser_results_volterra, ser_results_volterra_rx, ser_results_volterra_combined,
-            ser_results_tx, ser_results_tx_complex, ser_results_rx, ser_results_rx_complex,
-            ser_results_combined, ser_results_combined_complex)
-
-def plot_results(results, SNR):
-    
-    # SER vs Number of Parameters
-    plt.figure(figsize=(12, 8))
-
-    def plot_individual_results(results, label, marker, linestyle, color):
-        num_params, ser = zip(*results)
-        plt.plot(num_params, ser, marker=marker, linestyle=linestyle, color=color, label=label)
-
-    # Unpack results
-    (ser_results_volterra, ser_results_volterra_rx, ser_results_volterra_combined,
-     ser_results_tx, ser_results_tx_complex, ser_results_rx, ser_results_rx_complex,
-     ser_results_combined, ser_results_combined_complex) = results
-
-    # Volterra
-    plot_individual_results(ser_results_volterra, "Volterra Transmitter", 'o', '-', '#1f77b4')  # muted blue
-    plot_individual_results(ser_results_volterra_rx, "Volterra Receiver", 'd', '--', '#1f99d4')  # slightly lighter blue
-    plot_individual_results(ser_results_volterra_combined, "Volterra Combined", 's', '-.', '#1f55b4')  # slightly darker blue
-
-    # Transmitter
-    plot_individual_results(ser_results_tx, "NN Transmitter", 'o', '-', '#F06000')  # muted orange
-    plot_individual_results(ser_results_tx_complex, "NN Transmitter (Complex)", 'o', '-', '#FF8F00')  # light orange
-
-    # Receiver
-    plot_individual_results(ser_results_rx, "NN Receiver", 'd', '--', '#F29F05')  # muted red
-    plot_individual_results(ser_results_rx_complex, "NN Receiver (Complex)", 'd', '--', '#FDD430')  # slightly darker red
-
-    # Combined
-    plot_individual_results(ser_results_combined, "NN Combined", 's', '-.', 'green')  # muted green
-    plot_individual_results(ser_results_combined_complex, "NN Combined (Complex)", 's', '-.', '#B4CF66')  # slightly lighter green
-
-    plt.xlabel("Number of Parameters")
-    plt.ylabel("Symbol Error Rate (SER)")
-    plt.yscale("log")
-    plt.title(f"SER vs. Number of Parameters for Different Models at SNR = {SNR}")
-    plt.legend(ncol=2)
-    plt.grid(True)
-    plt.show()
-
-# Store results for different SNR values
-results_5 = run_simulation(5)
-results_10 = run_simulation(10)
-results_15 = run_simulation(15)
-results_20 = run_simulation(20)
-
-# Plot results for different SNR values
-plot_results(results_5, 5)
-plot_results(results_10, 10)
-plot_results(results_15, 15)
-plot_results(results_20, 20)
+# Final plot adjustments
+plt.xlabel("SNR (dB)")
+plt.ylabel("SER")
+plt.yscale("log")
+plt.title("SER vs. SNR for Different Models")
+plt.legend(ncol=2)
+plt.grid()
+plt.show()
