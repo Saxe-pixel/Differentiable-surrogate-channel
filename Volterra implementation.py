@@ -9,14 +9,14 @@ from lib.utility import estimate_delay, find_closest_symbol
 from lib.channels import AWGNChannel, AWGNChannelWithLinearISI, WienerHammersteinISIChannel
 import torch.optim as optim
 
-device = torch.device( "cpu")
+device = torch.device("cpu")
 print(device)
 
 # Simulation parameters
 SEED = 12345
 N_SYMBOLS = int(2 * 1e5)
 SPS = 8  # samples-per-symbol (oversampling rate)
-SNR_DB = 4.0  # signal-to-noise ratio in dB
+SNR_DB = 8.0  # signal-to-noise ratio in dB
 BAUD_RATE = 10e6  # number of symbols transmitted per second
 FILTER_LENGTH = 64
 Ts = 1 / BAUD_RATE  # symbol length
@@ -43,10 +43,10 @@ pulse_energy = np.max(gg)
 pulse_rx = torch.from_numpy(g).double().to(device)
 
 # Define h and H for Volterra series
-h_size = 400
-H_size = 25
-h = nn.Parameter(torch.randn(h_size, dtype=torch.double, device=device) * 0.01)
-H = nn.Parameter(torch.randn(H_size, H_size, dtype=torch.double, device=device) * 0.01)
+h_size = 25
+H_size = 15
+h = nn.Parameter(torch.zeros(h_size, dtype=torch.double, device=device) * 0.01)
+H = nn.Parameter(torch.zeros(H_size, H_size, dtype=torch.double, device=device) * 0.01)
 
 optimizer = torch.optim.Adam([h, H], lr=0.001)
 channel = WienerHammersteinISIChannel(snr_db=SNR_DB, pulse_energy=pulse_energy, samples_pr_symbol=SPS)
