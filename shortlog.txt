@@ -4,4 +4,5 @@
      6	WikeMarzowsky (HC)
      3	Saxe-pixel
 
-Nicolaigarder har flest 'commits' da vi ofte har arbejdet sammen på hans computer, for ikke at rode med den samme kode allesammen.
+nicolaigarder har flest 'commits' da vi ofte har arbejdet sammen på hans computer, 
+for ikke at rode med den samme kode allesammen.
