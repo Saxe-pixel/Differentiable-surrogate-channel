@@ -46,6 +46,7 @@ class AWGNChannelWithLinearISI(CommunicationChannel):
     def __init__(self, snr_db, pulse_energy, samples_pr_symbol, dtype=torch.float64) -> None:
         super().__init__()
         h_isi = [1.0, 0.3, 0.1]  # simple minimum phase with zeros at (0.2, -0.5)
+        h_isi = [1.0, 0.3, 0.1]  # simple minimum phase with zeros at (0.2, -0.5)
         h_isi_zeropadded = np.zeros(samples_pr_symbol * (len(h_isi) - 1) + 1)
         h_isi_zeropadded[::samples_pr_symbol] = h_isi
         h_isi_zeropadded = h_isi_zeropadded / np.linalg.norm(h_isi_zeropadded)
