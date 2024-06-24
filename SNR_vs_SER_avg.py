@@ -17,19 +17,26 @@ BAUD_RATE = 10e6  # number of symbols transmitted pr. second
 FILTER_LENGTH = 64
 Ts = 1 / BAUD_RATE  # symbol length
 fs = BAUD_RATE * SPS
+random_obj = np.random.default_rng(SEED)
 
 # Generate data - use Pulse Amplitude Modulation (PAM)
 pam_symbols = np.array([-3, -1, 1, 3])
+tx_symbols = torch.from_numpy(random_obj.choice(pam_symbols, size=(N_SYMBOLS,), replace=True))
 
 # Split the data into training and testing
 train_size = int(0.7 * N_SYMBOLS)
 test_size = int(N_SYMBOLS - train_size)
+train_symbols = tx_symbols[:train_size]
+test_symbols = tx_symbols[train_size:]
 
 # Construct pulse shape for both transmitter and receiver
 t, g = rrcosfilter(FILTER_LENGTH, 0.5, Ts, fs)
 g /= np.linalg.norm(g)  # Normalize pulse to have unit energy
 gg = np.convolve(g, g[::-1])
 pulse_energy = np.max(gg)
+
+# Define the pulse for the transmitter (to be optimized)
+pulse_tx = torch.zeros((FILTER_LENGTH,), dtype=torch.double).requires_grad_(True)
 
 # Define the pulse for the receiver (fixed)
 pulse_rx = torch.from_numpy(g).double()  # No requires_grad_() as it's not being optimized
@@ -85,28 +92,20 @@ def theoretical_ser(snr_db, pulse_energy, modulation_order):
     return SER_theoretical
 
 # Plotting results
-SNRs = range(0, 11, 2)
+SNRs = range(0, 9)
 theoretical_SERs = [theoretical_ser(snr_db, pulse_energy, 4) for snr_db in SNRs]
 awgn_SERs = []
 awgn_isi_SERs = []
 
 num_epochs = 10
 batch_size = 512
-n_runs = 5
+n_runs = 10
 
 for snr_db in SNRs:
     awgn_ser_list = []
     awgn_isi_ser_list = []
 
-    for run in range(n_runs):
-        # Set a different seed for each run
-        np.random.seed(SEED + run)
-        random_obj = np.random.default_rng(SEED + run)
-
-        tx_symbols = torch.from_numpy(random_obj.choice(pam_symbols, size=(N_SYMBOLS,), replace=True))
-        train_symbols = tx_symbols[:train_size]
-        test_symbols = tx_symbols[train_size:]
-
+    for _ in range(n_runs):
         # Train and evaluate on AWGNChannel
         pulse_tx = torch.zeros((FILTER_LENGTH,), dtype=torch.double).requires_grad_(True)
         optimizer = optim.Adam([pulse_tx], lr=0.001)
@@ -122,7 +121,10 @@ for snr_db in SNRs:
         optimized_pulses = train_model(train_symbols, pulse_tx, pulse_rx, optimizer, channel, num_epochs, batch_size)
         SER = evaluate_model(test_symbols, optimized_pulses, pulse_rx, channel, pulse_tx.shape[0] // 2)
         awgn_isi_ser_list.append(SER.item())
-        print(f"SNR: {snr_db}, Run: {run + 1}, AWGN SER: {awgn_ser_list[-1]}, AWGN with ISI SER: {awgn_isi_ser_list[-1]}")
+        print(f"SNR: {snr_db}, AWGN SER: {awgn_ser_list[-1]}, AWGN with ISI SER: {awgn_isi_ser_list[-1]}")
+
+        # Print # run
+        print(f"Run: {_ + 1}")
 
     # Average SERs
     awgn_SERs.append(np.mean(awgn_ser_list))
